@@ -1,0 +1,19 @@
+问题一：
+findfont: Generic family 'sans-serif' not found because none of the following families were found: SimHei
+
+缺少SimHei字体。
+
+解决方法：
+将misc/SimHei/SimHei.ttf 复制到 /usr/share/fonts，
+sudo fc-cache -fv
+rm -rf ~/.cache/matplotlib
+
+
+没有fc-cache命令的话：
+sudo apt-get update
+sudo apt-get install -y fontconfig  # 安装 Fontconfig 核心包
+
+
+
+
+

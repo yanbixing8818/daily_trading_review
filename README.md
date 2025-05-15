@@ -1,1 +1,36 @@
-# daily_trading_review
+# 每日复盘
+
+1. 涨跌停数量随时间变化图表
+python文件：analyze_limit_up_down.py
+执行命令：python3 analyze_limit_up_down.py
+结果：生成output.png 和 recent_30_days_limit_up_down.xlsx
+
+
+2. A股市场数据分析
+python文件：calc_all_a_stock_data.py
+执行命令：streamlit run calc_all_a_stock_data.py
+点击生成的网址，可以看到一些数据；
+点击网页上的导出数据，生成：A股市场数据.xlsx
+
+
+3. 统计板块区间涨幅生成热力图
+python文件：Sector_Interval_Performance_Analysis.py
+执行命令：streamlit run Sector_Interval_Performance_Analysis.py
+点击生成的网址，可以看到热力图。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
