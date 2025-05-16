@@ -19,7 +19,10 @@ python文件：Sector_Interval_Performance_Analysis.py
 点击生成的网址，可以看到热力图。
 
 
-
+4. 涨停原因 
+python文件：zhangtingyuanyin.py
+执行命令：streamlit run py_script/zhangtingyuanyin.py
+点击生成的网址，可以看到涨停原因分组后的表格，并且按照涨停原因生成热力图，方便看出板块效应。
 
 
 
