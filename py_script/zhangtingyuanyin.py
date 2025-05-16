@@ -46,21 +46,18 @@ def app():
             return
         # 列选择和处理
         selected_columns = [
-            '股票代码', '股票简称', '最新价', '最新涨跌幅', f'连续涨停天数[{date_str}]', f'首次涨停时间[{date_str}]',
-            f'最终涨停时间[{date_str}]', f'涨停封单量[{date_str}]',
-            f'涨停封单额[{date_str}]', f'涨停类型[{date_str}]',
-            f'几天几板[{date_str}]', f'涨停原因类别[{date_str}]',
-            f'a股市值(不含限售股)[{date_str}]'
+            '股票代码', '股票简称', '最新价', '最新涨跌幅', f'连续涨停天数[{date_str}]', f'几天几板[{date_str}]', f'首次涨停时间[{date_str}]',
+            f'最终涨停时间[{date_str}]', f'涨停封单额[{date_str}]', f'涨停类型[{date_str}]',
+            f'涨停原因类别[{date_str}]', f'a股市值(不含限售股)[{date_str}]'
         ]
         jj_df = df[selected_columns].copy()
         # 添加涨停原因列
         jj_df['涨停原因'] = jj_df[f'涨停原因类别[{date_str}]']
         display_columns = [
             '股票代码', '股票简称', '最新价', '最新涨跌幅', '涨停原因',
-            f'连续涨停天数[{date_str}]', f'首次涨停时间[{date_str}]',
-            f'最终涨停时间[{date_str}]', f'涨停封单量[{date_str}]',
-            f'涨停封单额[{date_str}]', f'涨停类型[{date_str}]',
-            f'几天几板[{date_str}]', f'a股市值(不含限售股)[{date_str}]'
+            f'连续涨停天数[{date_str}]', f'几天几板[{date_str}]', f'首次涨停时间[{date_str}]',
+            f'最终涨停时间[{date_str}]', f'涨停封单额[{date_str}]', f'涨停类型[{date_str}]',
+            f'a股市值(不含限售股)[{date_str}]'
         ]
         # 排序和格式化
         jj_df_sorted = jj_df.sort_values(
@@ -68,6 +65,35 @@ def app():
             ascending=[True, False]
         ).reset_index(drop=True)
         jj_df_sorted['最新涨跌幅'] = pd.to_numeric(jj_df_sorted['最新涨跌幅'], errors='coerce').round(0).astype('Int64')
+        # 强制去掉涨停封单量这一列
+        seal_col = f'涨停封单量[{date_str}]'
+        display_columns = [col for col in display_columns if col != seal_col]
+        if seal_col in jj_df_sorted.columns:
+            jj_df_sorted = jj_df_sorted.drop(columns=[seal_col])
+        if seal_col in jj_df.columns:
+            jj_df = jj_df.drop(columns=[seal_col])
+        # 涨停封单额列转为万为单位，取整，不保留小数，并在数字后加"万"
+        seal_amt_col = f'涨停封单额[{date_str}]'
+        if seal_amt_col in jj_df_sorted.columns:
+            jj_df_sorted[seal_amt_col] = pd.to_numeric(jj_df_sorted[seal_amt_col], errors='coerce').div(10000).round(0).astype('Int64').astype(str) + '万'
+            jj_df[seal_amt_col] = pd.to_numeric(jj_df[seal_amt_col], errors='coerce').div(10000).round(0).astype('Int64').astype(str) + '万'
+        # a股市值(不含限售股)列转为亿为单位，取整，不保留小数，并在数字后加"亿"
+        old_market_col = f'a股市值(不含限售股)[{date_str}]'
+        new_market_col = f'a股市值[{date_str}]'
+        if old_market_col in jj_df_sorted.columns:
+            jj_df_sorted[new_market_col] = pd.to_numeric(jj_df_sorted[old_market_col], errors='coerce').div(100000000).round(0).astype('Int64').astype(str) + '亿'
+            jj_df[new_market_col] = pd.to_numeric(jj_df[old_market_col], errors='coerce').div(100000000).round(0).astype('Int64').astype(str) + '亿'
+            jj_df_sorted = jj_df_sorted.drop(columns=[old_market_col])
+            jj_df = jj_df.drop(columns=[old_market_col])
+        # 更新display_columns中的列名
+        display_columns = [col if col != old_market_col else new_market_col for col in display_columns]
+        # 调整'几天几板'到'首次涨停时间'前面
+        jtj_col = f'几天几板[{date_str}]'
+        fst_col = f'首次涨停时间[{date_str}]'
+        if jtj_col in display_columns and fst_col in display_columns:
+            display_columns.remove(jtj_col)
+            fst_idx = display_columns.index(fst_col)
+            display_columns.insert(fst_idx, jtj_col)
         # 美观样式
         styler = jj_df_sorted[display_columns].style.set_table_styles(
             [
@@ -75,6 +101,7 @@ def app():
                 {'selector': 'thead th', 'props': [('background-color', '#e0e0e0'), ('color', '#222')]}
             ]
         ).set_properties(**{'border': '2px solid #666', 'padding': '6px'})
+        st.markdown(f"### 股票涨停分析 {date_str}")
         st.markdown(styler.to_html(), unsafe_allow_html=True)
         st.markdown('<br>', unsafe_allow_html=True)
         # 保存Excel内容
@@ -167,7 +194,7 @@ def app():
             )
             fig.update_traces(textposition='outside')
             fig.update_layout(
-                title='涨停原因热力图（Plotly）',
+                title='涨停原因热力图',
                 xaxis_title='个数',
                 yaxis_title='涨停原因',
                 height=max(600, 40 * len(grouped_heatmap)),
