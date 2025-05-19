@@ -3,6 +3,7 @@ aiohttp==3.11.18
 aiosignal==1.3.2
 akracer==0.0.13
 akshare==1.16.91
+nodejs-bin==18.4.0a4
 altair==5.5.0
 anyio==4.2.0
 argon2-cffi==23.1.0
