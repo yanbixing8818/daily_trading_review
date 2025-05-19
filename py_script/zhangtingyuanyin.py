@@ -41,7 +41,7 @@ def app():
         # 获取数据
         param = f"{date_str}涨停，非ST"
         df = pywencai.get(query=param, sort_key='成交金额', sort_order='desc')
-        if df.empty:
+        if df is None or df.empty:
             st.warning("当日没有涨停股票数据！")
             return
         # 列选择和处理
