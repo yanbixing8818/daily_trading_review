@@ -7,3 +7,5 @@ seaborn==0.13.2
 streamlit==1.45.1
 nodejs-bin==18.4.0a4
 pywencai==0.13.1
+dataframe_image==0.2.7
+
