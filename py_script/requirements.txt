@@ -58,7 +58,6 @@ GitPython==3.1.44
 greenlet==3.2.2
 grpcio==1.66.1
 grpcio-tools==1.66.1
-hpccli @ file:///home/yanbixing/nn_model_converter/Vegas_uw/20240903.Vegas_uw.4f.a12-16.basebos4-8/hpccli-0.0.7-py3-none-any.whl#sha256=273008efa7f8fec037a989de017aa9b81b1867e03dda17a6df9091807735cd6d
 html5lib==1.1
 httplib2==0.20.2
 idna==3.4
