@@ -30,8 +30,10 @@ python文件：dingding_fupan1.py
 执行命令：python3 dingding_fupan1.py
 会直接把涨停原因里面的3张图发送到钉钉群里面。
 
-
-
+6. 连板天梯
+python文件：lianbantianti.py
+执行命令：streamlit run lianbantianti.py
+点击生成的网址，可以看到连板天梯图。
 
 
 
