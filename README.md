@@ -25,6 +25,10 @@ python文件：zhangtingyuanyin.py
 点击生成的网址，可以看到涨停原因分组后的表格，并且按照涨停原因生成热力图，方便看出板块效应。
 
 
+5. 钉钉复盘v1
+python文件：dingding_fupan1.py
+执行命令：python3 dingding_fupan1.py
+会直接把涨停原因里面的3张图发送到钉钉群里面。
 
 
 

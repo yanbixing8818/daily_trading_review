@@ -208,3 +208,5 @@ XlsxWriter==3.2.3
 yarg==0.1.9
 yarl==1.20.0
 zipp==1.0.0
+apscheduler==3.10.4
+chinese-calendar==1.8.0
