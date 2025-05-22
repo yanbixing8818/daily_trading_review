@@ -19,9 +19,9 @@ matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Un
 matplotlib.rcParams['axes.unicode_minus'] = False
 
 # 企业内部应用参数
-APPKEY = 'dingdh0hnt40b7eqyivc'
-APPSECRET = 'eXbAsAG5HRYMNFW4x3ffL1kSLepZcldVfyEeiSvsuhb5js_foSRZHtOtXrWo_5_f'
-CHATID = 'chat9652245847eebc05ee9e1a1fea02ceda'  # 你的目标群chatid
+APPKEY = 'dingdh0hnt40b7xxxxxxxx'
+APPSECRET = 'eXbAsAG5HRYMNFW4x3ffL1kSLepZcldVxxxxxxxxxxxxxxxx'
+CHATID = 'chat9652245847eebc0xxxxxxxxx'  # 你的目标群chatid
 
 def get_access_token(appkey, appsecret):
     url = f"https://oapi.dingtalk.com/gettoken?appkey={appkey}&appsecret={appsecret}"
