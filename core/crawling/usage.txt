@@ -1,0 +1,33 @@
+
+1. 获取一个股票当天的分时行情：
+    stock_zh_a_hist_pre_min_em_df = stock_zh_a_hist_pre_min_em(symbol="833454")
+
+2. 获取一个股票一段交易日的行情：
+    stock_zh_a_hist_df = stock_zh_a_hist(
+        symbol="833454",
+        period="daily",
+        start_date="20170301",
+        end_date="20211115",
+        adjust="hfq",
+    )
+
+3. 获取全市场股票当天的行情：
+    stock_zh_a_spot_em_df = stock_zh_a_spot_em()
+        print(stock_zh_a_spot_em_df)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
