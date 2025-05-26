@@ -105,10 +105,36 @@ def plot_highest_boards(trade_dates, highest_boards, highest_names):
 def app():
     set_chinese_font()
     st.title("前30个交易日每日涨停股票最高板数")
-    trade_dates = get_trade_dates(30)
+
+    # 获取所有可用交易日
+    all_trade_dates = get_trade_dates(3000)
+    all_trade_dates_dt = [datetime.strptime(d, "%Y%m%d").date() for d in all_trade_dates]
+    default_dates = all_trade_dates_dt[-30:]
+
+    # 三列同排
+    col1, col2, col3 = st.columns([1,1,1])
+    with col1:
+        start_date = st.date_input("开始日期", value=default_dates[0], min_value=all_trade_dates_dt[0], max_value=all_trade_dates_dt[-1], key="start_date")
+    with col2:
+        end_date = st.date_input("结束日期", value=default_dates[-1], min_value=all_trade_dates_dt[0], max_value=all_trade_dates_dt[-1], key="end_date")
+    with col3:
+        regenerate = st.button("重新生成")
+
+    # 默认显示最近30天
+    if not regenerate:
+        trade_dates = [d for d in all_trade_dates if default_dates[0] <= datetime.strptime(d, "%Y%m%d").date() <= default_dates[-1]]
+    else:
+        if start_date and end_date and start_date <= end_date:
+            trade_dates = [d for d in all_trade_dates if start_date <= datetime.strptime(d, "%Y%m%d").date() <= end_date]
+            if not trade_dates:
+                st.warning("所选区间无交易日，已恢复默认。")
+                trade_dates = [d for d in all_trade_dates if default_dates[0] <= datetime.strptime(d, "%Y%m%d").date() <= default_dates[-1]]
+        else:
+            trade_dates = [d for d in all_trade_dates if default_dates[0] <= datetime.strptime(d, "%Y%m%d").date() <= default_dates[-1]]
+
     highest_boards, highest_names = get_highest_boards(trade_dates)
     buf = plot_highest_boards(trade_dates, highest_boards, highest_names)
-    st.image(Image.open(buf), caption='前30个交易日每日涨停股票最高板数', use_container_width=True)
+    st.image(Image.open(buf), caption='所选区间每日涨停股票最高板数', use_container_width=True)
 
 
 if __name__ == "__main__":
