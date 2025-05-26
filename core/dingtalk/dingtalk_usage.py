@@ -2,9 +2,9 @@ import requests
 import io
 
 # 企业内部应用参数
-APPKEY = 'dingdh0hxxxxxxx'
-APPSECRET = 'eXbAsAG5HRYMNFW4xxxxxxxxxxxxxxx'
-CHATID = 'chat96522458xxxxxxxxxxxx'  # 你的目标群chatid
+APPKEY = 'dingdh0hnxxxxxxxxxx'
+APPSECRET = 'eXbAsAG5HRYMxxxxxxxxxxxxxxxxxxx'
+CHATID = 'chat965224584xxxxxxxxxxxxxxxx'  # 你的目标群chatid
 
 def get_access_token(appkey, appsecret):
     url = f"https://oapi.dingtalk.com/gettoken?appkey={appkey}&appsecret={appsecret}"
@@ -46,10 +46,27 @@ def send_image_to_group(access_token, chatid, media_id):
     res = requests.post(url, json=data)
     print('发送图片返回:', res.json())
 
-def send_to_dingtalk(img):
+def send_text_to_group(access_token, chatid, message):
+    url = f"https://oapi.dingtalk.com/chat/send?access_token={access_token}"
+    data = {
+        "chatid": chatid,
+        "msg": {
+            "msgtype": "text",
+            "text": {
+                "content": message
+            }
+        }
+    }
+    res = requests.post(url, json=data)
+    print('发送文本返回:', res.json())
+
+def send_to_dingtalk(img, message=None):
     access_token = get_access_token(APPKEY, APPSECRET)
     media_id = upload_image_to_dingtalk(access_token, img)
+    if message:
+        send_text_to_group(access_token, CHATID, message)
     send_image_to_group(access_token, CHATID, media_id)
 
+
 if __name__ == "__main__":
-    send_to_dingtalk("test.png")
+    send_to_dingtalk("test.png", message="测试图片")
