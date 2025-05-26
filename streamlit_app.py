@@ -4,8 +4,12 @@ import subjob.zhangtingyuanyin as ztyy
 import subjob.lianbantianti as lbtt
 import subjob.longtouguzongkuo as ltgzk
 import subjob.zhangdietingshuliang as zdtsl
+import subjob.all_a_stock_data as aasd
+
+
 PAGES = {
     "主页": home,
+    "A股市场数据": aasd,
     "龙头股总括": ltgzk,
     "涨停原因": ztyy,
     "最高板分析": lbtt,
