@@ -16,6 +16,7 @@ import plotly.graph_objects as go
 import plotly.io as pio
 import numpy as np
 from matplotlib import cm
+from core.dingtalk.dingtalk_usage import send_to_dingtalk
 matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'sans-serif']
 matplotlib.rcParams['axes.unicode_minus'] = False
 
@@ -266,11 +267,9 @@ def scheduled_job():
         heatmap_file = f"涨停原因热力图_{date_str}.png"
         save_heatmap_from_grouped(grouped, date_str, heatmap_file)
         # 钉钉发送
-        access_token = get_access_token(APPKEY, APPSECRET)
         for img_file in [f"涨停股票列表_{date_str}.png", f"涨停原因统计_{date_str}.png", heatmap_file]:
             try:
-                media_id = upload_image_to_dingtalk(access_token, img_file)
-                send_image_to_group(access_token, CHATID, media_id)
+                send_to_dingtalk(img_file)
             except Exception as e:
                 print(f"发送图片 {img_file} 失败: {e}")
     except Exception as e:
