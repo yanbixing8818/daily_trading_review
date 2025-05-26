@@ -78,7 +78,7 @@ def get_highest_boards(trade_dates):
 def plot_highest_boards(trade_dates, highest_boards, highest_names):
     fig, ax = plt.subplots(figsize=(16, 7))
     ax.plot(trade_dates, highest_boards, marker='o', color='orangered', linewidth=2)
-    ax.set_title('前30个交易日每日涨停股票最高板数')
+    ax.set_title('近30个交易日每日涨停股票最高板数')
     ax.set_xlabel('日期')
     ax.set_ylabel('最高板数')
     ax.set_xticklabels(trade_dates, rotation=45)
@@ -104,7 +104,7 @@ def plot_highest_boards(trade_dates, highest_boards, highest_names):
 
 def app():
     set_chinese_font()
-    st.title("前30个交易日每日涨停股票最高板数")
+    st.title("近30个交易日每日涨停股票最高板数")
 
     # 获取所有可用交易日
     all_trade_dates = get_trade_dates(3000)

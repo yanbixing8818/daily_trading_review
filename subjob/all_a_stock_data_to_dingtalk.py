@@ -53,7 +53,7 @@ def plot_distribution(distribution):
     return fig
 
 # 主应用逻辑
-def app():
+def send_all_a_stock_data_to_dingtalk():
     # 标题
     st.title("A股市场概况")
 
@@ -104,4 +104,4 @@ def app():
             )
 
 if __name__ == "__main__":
-    app()
+    send_all_a_stock_data_to_dingtalk()

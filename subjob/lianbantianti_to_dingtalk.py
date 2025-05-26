@@ -73,7 +73,7 @@ def plot_highest_boards(trade_dates, highest_boards, highest_names):
     fig, ax = plt.subplots(figsize=(16, 7))
     x = range(len(trade_dates))
     ax.plot(x, highest_boards, marker='o', color='orangered', linewidth=2)
-    ax.set_title('前30个交易日每日涨停股票最高板数')
+    ax.set_title('近30个交易日每日涨停股票最高板数')
     ax.set_xlabel('日期')
     ax.set_ylabel('最高板数')
     ax.set_xticks(x)
@@ -97,15 +97,15 @@ def plot_highest_boards(trade_dates, highest_boards, highest_names):
     buf.seek(0)
     return buf
 
-def main():
+def send_lianbantianti_to_dingtalk():
     set_chinese_font()
     trade_dates = get_trade_dates(30)
     highest_boards, highest_names = get_highest_boards(trade_dates)
     buf = plot_highest_boards(trade_dates, highest_boards, highest_names)
     # 不保存图片，直接发送到钉钉
-    send_to_dingtalk(buf)
+    send_to_dingtalk(buf, "近30个交易日每日涨停股票最高板数")
 
 if __name__ == "__main__":
-    main()
+    send_lianbantianti_to_dingtalk()
 
 

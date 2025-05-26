@@ -47,7 +47,7 @@ def app():
     result_df = pd.merge(limit_up_df, limit_down_df, on='日期')
     print(result_df)
 
-    result_df.to_excel('recent_30_days_limit_up_down.xlsx', index=False)
+    # result_df.to_excel('recent_30_days_limit_up_down.xlsx', index=False)
 
     plt.figure(figsize=(24, 12))
     sns.lineplot(x='日期', y='涨停数量', data=result_df, label='涨停数量', color='red')

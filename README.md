@@ -53,6 +53,11 @@ core/crawling/stock_hist_em.py   函数实现
 core/crawling/stock_hist_em.txt  对应python文件做的一些实验和函数解释说明
 core/crawling/stock_hist_em.py   整个抓取方式的函数总结
 
+9. 添加钉钉复盘
+python文件：dingtalk_daily_trading_review.py
+执行命令：python3 dingtalk_daily_trading_review.py
+结果：自动开始复盘，发送到dingding群内。
+
 
 
 

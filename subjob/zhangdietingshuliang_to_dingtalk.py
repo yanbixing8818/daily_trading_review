@@ -36,7 +36,7 @@ def get_limit_up_down_stocks(trade_dates):
             print(f"Error fetching data for {date}: {e}")
     return limit_up_counts, limit_down_counts
 
-def app():
+def send_zhangdietingshuliang_to_dingtalk():
     # 默认统计前15个交易日
     trade_dates = get_trade_dates_last_n(15)
     limit_up_counts, limit_down_counts = get_limit_up_down_stocks(trade_dates)
@@ -64,8 +64,8 @@ def app():
     buf = io.BytesIO()
     plt.savefig(buf, format='png', dpi=300)
     buf.seek(0)
-    send_to_dingtalk(buf)
+    send_to_dingtalk(buf, "近15个交易日涨跌停数量变化")
     plt.close()
 
 if __name__ == "__main__":
-    app()
+    send_zhangdietingshuliang_to_dingtalk()

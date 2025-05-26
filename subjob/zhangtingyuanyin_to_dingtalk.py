@@ -239,7 +239,7 @@ def process_data(date_str):
         print(f"数据处理失败: {str(e)}")
         return None, None
 
-def scheduled_job():
+def send_zhangtingyuanyin_to_dingtalk():
     """调度任务：生成图片并发送钉钉"""
     if not is_workday(datetime.now()):
         return
@@ -266,25 +266,35 @@ def scheduled_job():
         )
         heatmap_file = f"涨停原因热力图_{date_str}.png"
         save_heatmap_from_grouped(grouped, date_str, heatmap_file)
-        # 钉钉发送
-        for img_file in [f"涨停股票列表_{date_str}.png", f"涨停原因统计_{date_str}.png", heatmap_file]:
-            try:
-                send_to_dingtalk(img_file)
-            except Exception as e:
-                print(f"发送图片 {img_file} 失败: {e}")
+        # 分别发送3个图片到钉钉
+        try:
+            send_to_dingtalk(f"涨停股票列表_{date_str}.png", "涨停原因")
+        except Exception as e:
+            print(f"发送图片 涨停股票列表_{date_str}.png 失败: {e}")
+
+        try:
+            send_to_dingtalk(f"涨停原因统计_{date_str}.png", "涨停板块分析")
+        except Exception as e:
+            print(f"发送图片 涨停原因统计_{date_str}.png 失败: {e}")
+
+        try:
+            send_to_dingtalk(heatmap_file, "涨停板块热力图")
+        except Exception as e:
+            print(f"发送图片 {heatmap_file} 失败: {e}")
     except Exception as e:
         print(f"获取数据或发送图片时发生错误：{str(e)}")
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--scheduled":
-        scheduler = BlockingScheduler(timezone="Asia/Shanghai")
-        scheduler.add_job(
-            scheduled_job,
-            CronTrigger(day_of_week='mon-fri', hour=16, minute=33)
-        )
-        try:
-            scheduler.start()
-        except (KeyboardInterrupt, SystemExit):
-            scheduler.shutdown()
-    else:
-        scheduled_job()
+    send_zhangtingyuanyin_to_dingtalk()
+    # if len(sys.argv) > 1 and sys.argv[1] == "--scheduled":
+    #     scheduler = BlockingScheduler(timezone="Asia/Shanghai")
+    #     scheduler.add_job(
+    #         scheduled_job,
+    #         CronTrigger(day_of_week='mon-fri', hour=16, minute=33)
+    #     )
+    #     try:
+    #         scheduler.start()
+    #     except (KeyboardInterrupt, SystemExit):
+    #         scheduler.shutdown()
+    # else:
+    #     scheduled_job()
