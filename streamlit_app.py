@@ -2,10 +2,11 @@ import streamlit as st
 import home
 import subjob.zhangtingyuanyin as ztyy
 import subjob.lianbantianti as lbtt
-
+import subjob.longtouguzongkuo as ltgzk
 
 PAGES = {
     "主页": home,
+    "龙头股总括": ltgzk,
     "涨停原因": ztyy,
     "最高板分析": lbtt,
     # "竞价分析": jingjiafenxi,
