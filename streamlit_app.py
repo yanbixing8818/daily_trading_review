@@ -3,12 +3,13 @@ import home
 import subjob.zhangtingyuanyin as ztyy
 import subjob.lianbantianti as lbtt
 import subjob.longtouguzongkuo as ltgzk
-
+import subjob.zhangdietingshuliang as zdtsl
 PAGES = {
     "主页": home,
     "龙头股总括": ltgzk,
     "涨停原因": ztyy,
     "最高板分析": lbtt,
+    "涨跌停数量分析": zdtsl,
     # "竞价分析": jingjiafenxi,
     # "个股分析": gegu,
     # "大盘分析": dapan,
