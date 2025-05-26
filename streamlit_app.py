@@ -1,7 +1,31 @@
 import streamlit as st
+import home
+import subjob.zhangtingyuanyin as ztyy
 
-# 设置页面标题
-st.title('简单的输出应用程序')
 
-# 输出一行文字
-st.write("欢迎使用Streamlit！")
+PAGES = {
+    "主页": home,
+    "涨停原因": ztyy,
+    # "最高板分析":zuigaoban_zhexian,
+    # "竞价分析": jingjiafenxi,
+    # "个股分析": gegu,
+    # "大盘分析": dapan,
+    # '大盘情绪': qingxu,
+    # '同花顺概念板块分析': bankuai_tonghuashun,
+    # '东方财富概念板块分析': bankuai_dongfangcaifu,
+    # '开盘啦概念板块分析': kaipanla_ticai,
+    # '回测': huice,
+    # '神奇九转': shenqijiuzhuan,
+    # '历年月度分析': all_month,
+    # '每日宜忌': meiriyiji
+}
+
+def main():
+    st.sidebar.title("每日复盘导航")
+    selection = st.sidebar.radio("跳转到", list(PAGES.keys()))
+
+    page = PAGES[selection]
+    page.app()
+
+if __name__ == "__main__":
+    main()
