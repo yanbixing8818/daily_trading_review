@@ -1,12 +1,13 @@
 import streamlit as st
 import home
 import subjob.zhangtingyuanyin as ztyy
+import subjob.lianbantianti as lbtt
 
 
 PAGES = {
     "主页": home,
     "涨停原因": ztyy,
-    # "最高板分析":zuigaoban_zhexian,
+    "最高板分析": lbtt,
     # "竞价分析": jingjiafenxi,
     # "个股分析": gegu,
     # "大盘分析": dapan,
