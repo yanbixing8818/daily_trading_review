@@ -16,23 +16,35 @@ pd.set_option('display.max_colwidth', 100)
 def get_limit_up_data(date):
     param = f"非ST,{date.strftime('%Y%m%d')}涨停"
     df = pywencai.get(query=param, sort_key='成交金额', sort_order='desc', loop=True)
+    if df is None:
+        st.error(f"未能获取到 {date.strftime('%Y-%m-%d')} 的涨停数据，请检查网络或稍后重试。")
+        return pd.DataFrame()
     return df
 
 def get_yesterday_zhangting_data(previous_date , date):
     param = f"非ST,{previous_date.strftime('%Y%m%d')}涨停"
     df = pywencai.get(query=param, sort_key='成交金额', sort_order='desc', loop=True)
+    if df is None:
+        st.error(f"未能获取到 {previous_date.strftime('%Y-%m-%d')} 的涨停数据，请检查网络或稍后重试。")
+        return pd.DataFrame()
     return df
 
 
 def get_poban(date):
     param = f"非ST,{date.strftime('%Y%m%d')}曾涨停"
     df = pywencai.get(query=param, sort_key='成交金额', sort_order='desc', loop=True)
+    if df is None:
+        st.error(f"未能获取到 {date.strftime('%Y-%m-%d')} 的曾涨停数据，请检查网络或稍后重试。")
+        return pd.DataFrame()
     return df
 
 
 def get_limit_down_data(date):
     param = f"非ST,{date.strftime('%Y%m%d')}跌停"
     df = pywencai.get(query=param, sort_key='成交金额', sort_order='desc', loop=True)
+    if df is None:
+        st.error(f"未能获取到 {date.strftime('%Y-%m-%d')} 的跌停数据，请检查网络或稍后重试。")
+        return pd.DataFrame()
     return df
 
 
