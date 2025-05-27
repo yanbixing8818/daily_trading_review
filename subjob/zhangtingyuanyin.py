@@ -30,6 +30,59 @@ def save_heatmap_from_grouped(grouped, date_str):
     buf.seek(0)
     return buf
 
+@st.cache_data(show_spinner=False)
+def get_limit_up_data(date):
+    param = f"非ST,{date.strftime('%Y%m%d')}涨停"
+    try:
+        df = pywencai.get(query=param, sort_key='成交金额', sort_order='desc', loop=True)
+    except Exception as e:
+        st.error(f"获取 {date.strftime('%Y-%m-%d')} 的涨停数据时发生异常: {e}")
+        return pd.DataFrame()
+    if df is None:
+        st.error(f"未能获取到 {date.strftime('%Y-%m-%d')} 的涨停数据，请检查网络或稍后重试。")
+        return pd.DataFrame()
+    return df
+
+@st.cache_data(show_spinner=False)
+def get_yesterday_zhangting_data(previous_date , date):
+    param = f"非ST,{previous_date.strftime('%Y%m%d')}涨停"
+    try:
+        df = pywencai.get(query=param, sort_key='成交金额', sort_order='desc', loop=True)
+    except Exception as e:
+        st.error(f"获取 {previous_date.strftime('%Y-%m-%d')} 的涨停数据时发生异常: {e}")
+        return pd.DataFrame()
+    if df is None:
+        st.error(f"未能获取到 {previous_date.strftime('%Y-%m-%d')} 的涨停数据，请检查网络或稍后重试。")
+        return pd.DataFrame()
+    return df
+
+@st.cache_data(show_spinner=False)
+def get_poban(date):
+    param = f"非ST,{date.strftime('%Y%m%d')}曾涨停"
+    try:
+        df = pywencai.get(query=param, sort_key='成交金额', sort_order='desc', loop=True)
+    except Exception as e:
+        st.error(f"获取 {date.strftime('%Y-%m-%d')} 的曾涨停数据时发生异常: {e}")
+        return pd.DataFrame()
+    if df is None:
+        st.error(f"未能获取到 {date.strftime('%Y-%m-%d')} 的曾涨停数据，请检查网络或稍后重试。")
+        return pd.DataFrame()
+    return df
+
+@st.cache_data(show_spinner=False)
+def get_limit_down_data(date):
+    param = f"非ST,{date.strftime('%Y%m%d')}跌停"
+    try:
+        df = pywencai.get(query=param, sort_key='成交金额', sort_order='desc', loop=True)
+    except Exception as e:
+        st.error(f"获取 {date.strftime('%Y-%m-%d')} 的跌停数据时发生异常: {e}")
+        return pd.DataFrame()
+    if df is None:
+        st.error(f"未能获取到 {date.strftime('%Y-%m-%d')} 的跌停数据，请检查网络或稍后重试。")
+        return pd.DataFrame()
+    return df
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def process_data(date_str):
     try:
         param = f"{date_str}涨停，非ST"

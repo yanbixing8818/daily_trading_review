@@ -10,6 +10,7 @@ import streamlit as st
 plt.rcParams['font.sans-serif'] = ['SimHei']  # 设置中文字体为黑体
 plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_trade_dates_last_n(n=30):
     trade_date_df = ak.tool_trade_date_hist_sina()
     trade_date_df['trade_date'] = pd.to_datetime(trade_date_df['trade_date'], format='%Y-%m-%d')
@@ -23,6 +24,7 @@ def get_trade_dates_last_n(n=30):
     trade_dates = selected['trade_date'].dt.strftime('%Y%m%d').tolist()
     return trade_dates
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_limit_up_down_stocks(trade_dates):
     limit_up_counts = []
     limit_down_counts = []

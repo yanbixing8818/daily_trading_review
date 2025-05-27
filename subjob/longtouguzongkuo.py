@@ -13,6 +13,7 @@ pd.set_option('display.max_columns', None)
 pd.set_option('display.expand_frame_repr', False)
 pd.set_option('display.max_colwidth', 100)
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_limit_up_data(date):
     param = f"非ST,{date.strftime('%Y%m%d')}涨停"
     df = pywencai.get(query=param, sort_key='成交金额', sort_order='desc', loop=True)
@@ -21,6 +22,7 @@ def get_limit_up_data(date):
         return pd.DataFrame()
     return df
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_yesterday_zhangting_data(previous_date , date):
     param = f"非ST,{previous_date.strftime('%Y%m%d')}涨停"
     df = pywencai.get(query=param, sort_key='成交金额', sort_order='desc', loop=True)
@@ -29,7 +31,7 @@ def get_yesterday_zhangting_data(previous_date , date):
         return pd.DataFrame()
     return df
 
-
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_poban(date):
     param = f"非ST,{date.strftime('%Y%m%d')}曾涨停"
     df = pywencai.get(query=param, sort_key='成交金额', sort_order='desc', loop=True)
@@ -38,7 +40,7 @@ def get_poban(date):
         return pd.DataFrame()
     return df
 
-
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_limit_down_data(date):
     param = f"非ST,{date.strftime('%Y%m%d')}跌停"
     df = pywencai.get(query=param, sort_key='成交金额', sort_order='desc', loop=True)
@@ -47,7 +49,7 @@ def get_limit_down_data(date):
         return pd.DataFrame()
     return df
 
-
+@st.cache_data(ttl=3600, show_spinner=False)
 def analyze_continuous_limit_up(df, date):
     # 提取连续涨停天数列和涨停原因类别列
     continuous_days_col = f'连续涨停天数[{date.strftime("%Y%m%d")}]'
@@ -75,7 +77,7 @@ def analyze_continuous_limit_up(df, date):
 
     return result
 
-
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_concept_counts(df, date):
     concepts = df[f'涨停原因类别[{date.strftime("%Y%m%d")}]'].str.split('+').explode().reset_index(drop=True)
     #concepts = df[f'涨停原因类别[{date.strftime("%Y%m%d")}]'].str.split('+', n=1).str[0].reset_index(drop=True)
@@ -83,7 +85,7 @@ def get_concept_counts(df, date):
     concept_counts.columns = ['概念', '出现次数']
     return concept_counts
 
-
+@st.cache_data(ttl=3600, show_spinner=False)
 def calculate_promotion_rates(current_df, previous_df, current_date, previous_date):
     """Calculate promotion rates between consecutive days"""
     current_days_col = f'连续涨停天数[{current_date.strftime("%Y%m%d")}]'
@@ -115,7 +117,6 @@ def calculate_promotion_rates(current_df, previous_df, current_date, previous_da
         })
 
     return pd.DataFrame(promotion_data)
-
 
 def app():
     st.title("A股涨停概念分析")

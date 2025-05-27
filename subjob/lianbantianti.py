@@ -31,6 +31,7 @@ def set_chinese_font():
         matplotlib.rcParams['font.sans-serif'] = ['sans-serif']
     matplotlib.rcParams['axes.unicode_minus'] = False
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_trade_dates(n=30):
     today = datetime.today().date()
     try:
@@ -47,6 +48,7 @@ def get_trade_dates(n=30):
     trade_dates = [d.strftime('%Y%m%d') for d in trade_cal['trade_date'].tolist()][-n:]
     return trade_dates
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_highest_boards(trade_dates):
     highest_boards = []
     highest_names = []
@@ -75,6 +77,7 @@ def get_highest_boards(trade_dates):
             highest_names.append('')
     return highest_boards, highest_names
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def plot_highest_boards(trade_dates, highest_boards, highest_names):
     fig, ax = plt.subplots(figsize=(16, 7))
     ax.plot(trade_dates, highest_boards, marker='o', color='orangered', linewidth=2)

@@ -5,6 +5,7 @@ import numpy as np
 import plotly.express as px
 import io
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_market_data():
     try:
         # 使用AKShare获取A股市场现货数据
@@ -15,6 +16,7 @@ def fetch_market_data():
         st.error(f"获取数据失败: {e}")
         return None, None, None
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def calculate_market_overview(df):
     total_stocks = len(df)
     up_stocks = len(df[df['涨跌幅'] > 0])
@@ -31,6 +33,7 @@ def calculate_market_overview(df):
     }
     return overview
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def calculate_stock_distribution(df):
     bins = [-np.inf, -10, -7, -5, -3, 0, 3, 5, 7, 10, np.inf]
     labels = ['跌幅10%以上', '跌幅7%-10%', '跌幅5%-7%', '跌幅3%-5%', '跌幅0%-3%',
@@ -39,6 +42,7 @@ def calculate_stock_distribution(df):
     distribution = df['distribution'].value_counts().sort_index()
     return distribution
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def plot_distribution(distribution):
     fig = px.bar(
         x=distribution.index,
