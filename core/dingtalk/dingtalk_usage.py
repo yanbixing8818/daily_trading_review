@@ -2,9 +2,9 @@ import requests
 import io
 
 # 企业内部应用参数
-APPKEY = 'dingdh0hnxxxxxxxxxx'
-APPSECRET = 'eXbAsAG5HRYMxxxxxxxxxxxxxxxxxxx'
-CHATID = 'chat965224584xxxxxxxxxxxxxxxx'  # 你的目标群chatid
+APPKEY = 'dingdh0hnt40b7eqyivc'
+APPSECRET = 'eXbAsAG5HRYMNFW4x3ffL1kSLepZcldVfyEeiSvsuhb5js_foSRZHtOtXrWo_5_f'
+CHATID = 'chat9652245847eebc05ee9e1a1fea02ceda'  # 你的目标群chatid
 
 def get_access_token(appkey, appsecret):
     url = f"https://oapi.dingtalk.com/gettoken?appkey={appkey}&appsecret={appsecret}"
