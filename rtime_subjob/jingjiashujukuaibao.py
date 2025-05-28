@@ -1,4 +1,3 @@
-
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pywencai
@@ -35,7 +34,7 @@ def dingtalk_markdown(content):
     response = requests.post(DINGTALK_WEBHOOK, json=data, headers=headers)
     print(f"消息发送状态: {response.status_code}")
 
-def job():
+def jingjiashujukuaibao():
     """定时任务主逻辑"""
     if not is_workday(datetime.now()):  # 排除节假日和周末
         return
@@ -50,19 +49,15 @@ def job():
             markdown_content += f"| {row['股票代码']}  | {row['股票简称']} |\n"
         dingtalk_markdown(markdown_content)
 
+def jingjiashujukuaibao_rtime_jobs():
+    scheduler = BlockingScheduler(timezone="Asia/Shanghai")
+    scheduler.add_job(jingjiashujukuaibao, 'cron', hour=9, minute=27)
+    print("竞价数据快报任务已启动，等待交易日9:27触发...")
+    scheduler.start()
+
 if __name__ == "__main__":
-    job()
-    # scheduler = BlockingScheduler(timezone="Asia/Shanghai")
-    # # 设置周一至周五9:28执行
-    # scheduler.add_job(
-    #     job,
-    #     CronTrigger(day_of_week='mon-fri', hour=9, minute=28)
-    #     #CronTrigger(day_of_week='*', hour=15, minute=15)
-    # )
-    # try:
-    #     scheduler.start()
-    # except (KeyboardInterrupt, SystemExit):
-    #     scheduler.shutdown()
+    jingjiashujukuaibao_rtime_jobs()
+
 
 
 

@@ -1,0 +1,19 @@
+import rtime_subjob.hongpanjiashu as hpjs
+import rtime_subjob.jingjiashujukuaibao as jjsjkb
+import rtime_subjob.shichanggailan as scgl
+from concurrent.futures import ThreadPoolExecutor
+
+
+def main():
+    with ThreadPoolExecutor() as executor:
+        executor.submit(jjsjkb.jingjiashujukuaibao_rtime_jobs)
+        executor.submit(hpjs.hongpanjiashu_rtime_jobs)
+        executor.submit(scgl.shichanggailan_rtime_jobs)
+
+
+#实时任务，由各个小模块自己控制发送时间，这里只作为一个启动入口
+if __name__ == "__main__":
+    main()
+    
+
+

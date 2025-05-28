@@ -106,7 +106,7 @@ def hongpanjiashu():
     dingtalk_markdown(up_msg)
 
 
-def schedule_hongpanjiashu_jobs():
+def hongpanjiashu_rtime_jobs():
     """
     启动定时任务，在指定时间点推送红盘家数
     """
@@ -121,11 +121,11 @@ def schedule_hongpanjiashu_jobs():
     ]
     for t in times:
         scheduler.add_job(hongpanjiashu, 'cron', **t)
-    print("定时任务已启动，等待触发...")
+    print("红盘家数任务已启动, 9:25, 10:00, 11:00, 13:00, 14:00, 15:00, 等待触发...")
     scheduler.start()
 
 if __name__ == "__main__":
-    schedule_hongpanjiashu_jobs()
+    hongpanjiashu_rtime_jobs()
 
 
 

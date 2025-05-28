@@ -76,18 +76,18 @@ def shichanggailan():
     dingtalk_markdown(markdown_content)
 
 
-def schedule_shichanggailan_jobs():
+def shichanggailan_rtime_jobs():
     """
     启动定时任务，每个整点推送市场概览
     """
     scheduler = BlockingScheduler(timezone="Asia/Shanghai")
     scheduler.add_job(shichanggailan, 'cron', minute=0)
-    print("定时任务已启动，等待触发...")
+    print("市场概览任务已启动，交易日每个整点触发，等待触发...")
     scheduler.start()
 
 
 if __name__ == "__main__":
-    schedule_shichanggailan_jobs()
+    shichanggailan_rtime_jobs()
 
 
 
