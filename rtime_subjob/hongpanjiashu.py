@@ -62,11 +62,11 @@ def calculate_market_overview(df):
 
 def save_up_stocks_count(time_str, up_count):
     """
-    保存指定时间点的红盘家数到本地CSV
+    保存指定时间点的红盘家数到同一个CSV文件（up_stocks.csv），每天为一行。
     """
-    today = datetime.now().strftime('%Y-%m-%d')
-    filename = f'up_stocks_{today}.csv'
+    filename = 'up_stocks.csv'
     columns = ['9:25', '10:00', '11:00', '13:00', '14:00', '15:00']
+    today = datetime.now().strftime('%Y-%m-%d')
     if os.path.exists(filename):
         df = pd.read_csv(filename, index_col=0)
     else:
@@ -79,7 +79,7 @@ def save_up_stocks_count(time_str, up_count):
 
 def hongpanjiashu():
     """
-    获取实时数据并推送红盘家数
+    获取实时数据并推送红盘家数，并将csv前5行以自定义文本格式通过钉钉发送（每行一行，字段用 | 分隔，避免钉钉竖表渲染问题）
     """
     now_str = datetime.now().strftime('%H:%M').lstrip('0')
     stock_zh_a_spot_em_df = stock_zh_a_spot_em()
@@ -87,8 +87,24 @@ def hongpanjiashu():
     up_count = overview['上涨家数']
     save_up_stocks_count(now_str, up_count)
     print(f"{now_str} 上涨家数: {up_count} 已保存。")
+    # 打印csv文件前5行，并构造自定义文本格式
+    try:
+        df = pd.read_csv('up_stocks.csv', index_col=0)
+        df.index = pd.to_datetime(df.index).strftime('%m-%d')
+        print('up_stocks.csv 前5行:')
+        print(df.head())
+        md = df.head().reset_index()
+        lines = []
+        lines.append(' | '.join(md.columns))
+        for _, row in md.iterrows():
+            lines.append(' | '.join(str(x) if pd.notnull(x) else '' for x in row))
+        msg = "### 整点红盘家数\n" + '\n'.join(lines)
+        dingtalk_markdown(msg, title="整点红盘家数")
+    except Exception as e:
+        print(f"读取up_stocks.csv失败: {e}")
     up_msg = f"### 🕘 {now_str} 红盘家数快报\n- 红盘家数: {up_count}\n\n{KEYWORD}"
     dingtalk_markdown(up_msg)
+
 
 def schedule_hongpanjiashu_jobs():
     """
