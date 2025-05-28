@@ -5,7 +5,7 @@ import subjob.lianbantianti as lbtt
 import subjob.longtouguzongkuo as ltgzk
 import subjob.zhangdietingshuliang as zdtsl
 import subjob.all_a_stock_data as aasd
-
+import subjob.bankuairelitu as bkrlt
 
 PAGES = {
     "主页": home,
@@ -14,6 +14,7 @@ PAGES = {
     "涨停原因": ztyy,
     "最高板分析": lbtt,
     "涨跌停数量分析": zdtsl,
+    "7日板块涨跌幅": bkrlt,
     # "竞价分析": jingjiafenxi,
     # "个股分析": gegu,
     # "大盘分析": dapan,
