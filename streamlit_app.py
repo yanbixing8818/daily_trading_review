@@ -1,11 +1,11 @@
 import streamlit as st
 import home
-import subjob.zhangtingyuanyin as ztyy
-import subjob.lianbantianti as lbtt
-import subjob.longtouguzongkuo as ltgzk
-import subjob.zhangdietingshuliang as zdtsl
-import subjob.all_a_stock_data as aasd
-import subjob.bankuairelitu as bkrlt
+import streamlit_subjob.zhangtingyuanyin as ztyy
+import streamlit_subjob.lianbantianti as lbtt
+import streamlit_subjob.longtouguzongkuo as ltgzk
+import streamlit_subjob.zhangdietingshuliang as zdtsl
+import streamlit_subjob.all_a_stock_data as aasd
+import streamlit_subjob.bankuairelitu as bkrlt
 
 PAGES = {
     "主页": home,
