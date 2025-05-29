@@ -45,7 +45,7 @@ def jingjiashujukuaibao():
         markdown_content += "| 代码 | 名称 |\n"
         markdown_content += "|------|------|\n"
         for _, row in data.iterrows():
-            print(data)
+            # print(data)
             markdown_content += f"| {row['股票代码']}  | {row['股票简称']} |\n"
         dingtalk_markdown(markdown_content)
 

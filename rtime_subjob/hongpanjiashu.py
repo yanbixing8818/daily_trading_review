@@ -62,7 +62,7 @@ def calculate_market_overview(df):
 
 def save_up_stocks_count(time_str, up_count):
     """
-    保存指定时间点的红盘家数到同一个CSV文件（up_stocks.csv），每天为一行。
+    保存指定时间点的红盘家数到同一个CSV文件（up_stocks.csv），每天为一行，最新数据在最上面。
     """
     filename = 'up_stocks.csv'
     columns = ['9:25', '10:00', '11:00', '13:00', '14:00', '15:00']
@@ -73,7 +73,9 @@ def save_up_stocks_count(time_str, up_count):
         df = pd.DataFrame(columns=columns)
         df.index.name = '日期'
     if today not in df.index:
-        df.loc[today] = [None]*len(columns)
+        # 新的一天，插入到最前面
+        new_row = pd.DataFrame([[None]*len(columns)], columns=columns, index=[today])
+        df = pd.concat([new_row, df])
     df.at[today, time_str] = up_count
     df.to_csv(filename)
 
