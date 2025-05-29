@@ -58,12 +58,13 @@ def save_up_stocks_count(time_str, up_count):
         # 新的一天，插入到最前面
         new_row = pd.DataFrame([[None]*len(columns)], columns=columns, index=[today])
         df = pd.concat([new_row, df])
-    df.at[today, time_str] = up_count
+    # 强制保存为整数
+    df.at[today, time_str] = int(up_count) if pd.notnull(up_count) else None
     df.to_csv(filename)
 
 def send_up_stocks_csv_to_dingtalk():
     """
-    读取up_stocks.csv，每行数据用 | 分隔，缺失数据用'----'占位，每行一行，拼成字符串后用dingtalk_text发送，确保钉钉换行。
+    读取up_stocks.csv前5行，每行数据用 | 分隔，缺失数据用' ------ '占位，每行一行，拼成字符串后用dingtalk_text发送，确保钉钉换行。
     """
     try:
         df = pd.read_csv('up_stocks.csv', index_col=0)
@@ -71,7 +72,7 @@ def send_up_stocks_csv_to_dingtalk():
         lines = []
         header = ['日期'] + list(df.columns)
         lines.append(' | '.join(header))
-        for idx, row in df.iterrows():
+        for idx, row in df.head(5).iterrows():
             line = [str(idx)]
             for col in df.columns:
                 val = row[col]
