@@ -92,7 +92,8 @@ def hongpanjiashu():
     # 打印csv文件前5行，并构造自定义文本格式
     try:
         df = pd.read_csv('up_stocks.csv', index_col=0)
-        df.index = pd.to_datetime(df.index).strftime('%m-%d')
+        # 自动推断多种日期格式
+        df.index = pd.to_datetime(df.index, errors='coerce', infer_datetime_format=True).strftime('%m-%d')
         print('up_stocks.csv 前5行:')
         print(df.head())
         md = df.head().reset_index()
