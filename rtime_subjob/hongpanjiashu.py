@@ -77,7 +77,7 @@ def send_up_stocks_csv_to_dingtalk():
             for col in df.columns:
                 val = row[col]
                 if pd.isna(val):
-                    val = ' ------ '
+                    val = ' ---- '
                 line.append(str(val))
             lines.append(' | '.join(line))
         msg = '\n'.join(lines)
