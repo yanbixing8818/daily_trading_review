@@ -15,72 +15,22 @@ def save_heatmap_from_grouped(grouped, date_str):
     norm = plt.Normalize(grouped_no_other['个数'].min(), grouped_no_other['个数'].max())
     cmap = matplotlib.colormaps['Oranges']
     colors = [cmap(norm(v)) for v in grouped_no_other['个数']]
-    fig, ax = plt.subplots(figsize=(20, max(4, 0.5 * len(grouped_no_other))))
+    # 图片大小调大一些
+    fig, ax = plt.subplots(figsize=(20, max(6, 0.8 * len(grouped_no_other))))
     bars = ax.barh(grouped_no_other['涨停原因'], grouped_no_other['个数'], color=colors)
     for idx, val in enumerate(grouped_no_other['个数']):
-        ax.text(val, idx, str(val), va='center', fontsize=14)
-    ax.set_xlabel('个数', fontsize=14)
-    ax.set_ylabel('涨停原因', fontsize=14)
-    ax.set_title(f'涨停原因热力图 {date_str}', fontsize=18)
-    fig.subplots_adjust(left=0.35)
+        ax.text(val, idx, str(val), va='center', fontsize=24)
+    ax.set_xlabel('个数', fontsize=24)
+    # 修正警告：先设置yticks再设置yticklabels
+    ax.set_yticks(range(len(grouped_no_other['涨停原因'])))
+    ax.set_yticklabels(grouped_no_other['涨停原因'], fontsize=30)
+    fig.subplots_adjust(left=0.30)
     plt.tight_layout()
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight', dpi=200)
+    plt.savefig(buf, format='png', bbox_inches='tight', dpi=100)
     plt.close()
     buf.seek(0)
     return buf
-
-@st.cache_data(show_spinner=False)
-def get_limit_up_data(date):
-    param = f"非ST,{date.strftime('%Y%m%d')}涨停"
-    try:
-        df = pywencai.get(query=param, sort_key='成交金额', sort_order='desc', loop=True)
-    except Exception as e:
-        st.error(f"获取 {date.strftime('%Y-%m-%d')} 的涨停数据时发生异常: {e}")
-        return pd.DataFrame()
-    if df is None:
-        st.error(f"未能获取到 {date.strftime('%Y-%m-%d')} 的涨停数据，请检查网络或稍后重试。")
-        return pd.DataFrame()
-    return df
-
-@st.cache_data(show_spinner=False)
-def get_yesterday_zhangting_data(previous_date , date):
-    param = f"非ST,{previous_date.strftime('%Y%m%d')}涨停"
-    try:
-        df = pywencai.get(query=param, sort_key='成交金额', sort_order='desc', loop=True)
-    except Exception as e:
-        st.error(f"获取 {previous_date.strftime('%Y-%m-%d')} 的涨停数据时发生异常: {e}")
-        return pd.DataFrame()
-    if df is None:
-        st.error(f"未能获取到 {previous_date.strftime('%Y-%m-%d')} 的涨停数据，请检查网络或稍后重试。")
-        return pd.DataFrame()
-    return df
-
-@st.cache_data(show_spinner=False)
-def get_poban(date):
-    param = f"非ST,{date.strftime('%Y%m%d')}曾涨停"
-    try:
-        df = pywencai.get(query=param, sort_key='成交金额', sort_order='desc', loop=True)
-    except Exception as e:
-        st.error(f"获取 {date.strftime('%Y-%m-%d')} 的曾涨停数据时发生异常: {e}")
-        return pd.DataFrame()
-    if df is None:
-        st.error(f"未能获取到 {date.strftime('%Y-%m-%d')} 的曾涨停数据，请检查网络或稍后重试。")
-        return pd.DataFrame()
-    return df
-
-@st.cache_data(show_spinner=False)
-def get_limit_down_data(date):
-    param = f"非ST,{date.strftime('%Y%m%d')}跌停"
-    try:
-        df = pywencai.get(query=param, sort_key='成交金额', sort_order='desc', loop=True)
-    except Exception as e:
-        st.error(f"获取 {date.strftime('%Y-%m-%d')} 的跌停数据时发生异常: {e}")
-        return pd.DataFrame()
-    if df is None:
-        st.error(f"未能获取到 {date.strftime('%Y-%m-%d')} 的跌停数据，请检查网络或稍后重试。")
-        return pd.DataFrame()
-    return df
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def process_data(date_str):
@@ -181,20 +131,8 @@ def app():
     if drop_cols:
         jj_df_sorted = jj_df_sorted.drop(columns=drop_cols)
 
-    st.subheader(f"涨停股票列表及板块分析")
-    st.markdown(f"""
-        <div class="table-title-flex">
-            <span style="font-size: 1.5em; font-weight: bold;">涨停股票列表 {date_str}</span>
-        </div>
-        <style>
-        .table-title-flex {{
-            display: flex;
-            justify-content: flex-start;
-            width: 100%;
-            margin-bottom: 0.5em;
-        }}
-        </style>
-    """, unsafe_allow_html=True)
+    #1. 使用st开始画图，先画涨停原因图
+    st.subheader(f"涨停原因{date_str}")
     st.markdown("""
         <style>
         .center-table-flex {
@@ -208,7 +146,7 @@ def app():
         }
         .center-table-flex th, .center-table-flex td {
             white-space: nowrap !important;
-            font-size: 21px !important;
+            font-size: 15px !important;
         }
         </style>
     """, unsafe_allow_html=True)
@@ -216,11 +154,32 @@ def app():
         f'<div class="center-table-flex">{jj_df_sorted.to_html(index=False)}</div>',
         unsafe_allow_html=True
     )
-    st.subheader(f"涨停原因统计 {date_str}")
-    st.dataframe(grouped)
+    
+    #2. 使用st开始画图，画涨停板块统计图
+    st.subheader(f"涨停板块统计 {date_str}")
+    # 对"涨停股票列表"列每15个股票换行
+    def wrap15(s):
+        stocks = str(s).replace('\n', '，').replace('<br>', '，').split('，')
+        stocks = [x for x in stocks if x.strip()]
+        lines = ['，'.join(stocks[i:i+15]) for i in range(0, len(stocks), 15)]
+        return '<br>'.join(lines)
+
+    grouped_display = grouped.copy()
+    if '涨停股票列表' in grouped_display.columns:
+        grouped_display['涨停股票列表'] = grouped_display['涨停股票列表'].apply(wrap15)
+
+    st.markdown(
+        f'<div class="center-table-flex">{grouped_display.to_html(index=False, escape=False)}</div>',
+        unsafe_allow_html=True
+    )
+
+    #3使用st开始画图，画涨停原因热力图
     st.subheader(f"涨停原因热力图 {date_str}")
+    # 调整图片大小参数
     heatmap_buf = save_heatmap_from_grouped(grouped, date_str)
-    st.image(heatmap_buf)
+    st.image(heatmap_buf, use_container_width=True)
+
+
 
 if __name__ == "__main__":
     app()

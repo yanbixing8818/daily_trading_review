@@ -253,6 +253,14 @@ def send_zhangtingyuanyin_to_dingtalk():
         drop_cols = [c for c in jj_df_sorted.columns if c.startswith('首次涨停时间') or c.startswith('最终涨停时间') or c.startswith('涨停原因类别')]
         if drop_cols:
             jj_df_sorted = jj_df_sorted.drop(columns=drop_cols)
+        # 生成图片前，处理涨停股票列表换行（每6个换行）
+        if '涨停股票列表' in grouped.columns:
+            def wrap6(s):
+                stocks = str(s).replace('\n', '，').replace('<br>', '，').split('，')
+                stocks = [x for x in stocks if x.strip()]
+                lines = ['，'.join(stocks[i:i+6]) for i in range(0, len(stocks), 6)]
+                return '<br>'.join(lines)
+            grouped['涨停股票列表'] = grouped['涨停股票列表'].apply(wrap6)
         # 生成图片
         save_df_as_img_matplotlib(jj_df_sorted, f"涨停股票列表_{date_str}.png", title=f"涨停股票列表 {date_str}", row_height=0.7)
         save_df_as_img_matplotlib(
