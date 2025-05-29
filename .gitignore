@@ -1,3 +1,4 @@
 *.png
 __pycache__/
 ./subjob/__pycache__/
+./data/

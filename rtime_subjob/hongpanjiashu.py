@@ -46,7 +46,7 @@ def save_up_stocks_count(time_str, up_count):
     """
     保存指定时间点的红盘家数到同一个CSV文件（up_stocks.csv），每天为一行，最新数据在最上面。
     """
-    filename = 'up_stocks.csv'
+    filename = './data/up_stocks.csv'
     columns = ['9:25', '10:00', '11:00', '13:00', '14:00', '15:00']
     today = datetime.now().strftime('%Y-%m-%d')
     if os.path.exists(filename):
@@ -67,7 +67,7 @@ def send_up_stocks_csv_to_dingtalk():
     读取up_stocks.csv前5行，每行数据用 | 分隔，缺失数据用' ------ '占位，每行一行，拼成字符串后用dingtalk_text发送，确保钉钉换行。
     """
     try:
-        df = pd.read_csv('up_stocks.csv', index_col=0)
+        df = pd.read_csv('./data/up_stocks.csv', index_col=0)
         df.index = pd.to_datetime(df.index, errors='coerce', infer_datetime_format=True).strftime('%m-%d')
         lines = []
         header = ['日期'] + list(df.columns)
@@ -121,6 +121,5 @@ def hongpanjiashu_rtime_jobs():
 
 if __name__ == "__main__":
     hongpanjiashu_rtime_jobs()
-
 
 
