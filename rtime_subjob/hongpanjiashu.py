@@ -11,34 +11,16 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=294d72c5b9bffddcad4e0220070a9df8104e5e8a3f161461bf2839cfd163b471"
 KEYWORD = "整点数据汇报"  # 钉钉机器人的关键词
 
-def dingtalk_markdown(content, title="A股市场监控提醒", at_mobiles=None, is_at_all=False):
-    """发送Markdown格式消息到钉钉
-    :param content: markdown文本内容
-    :param title: 消息标题
-    :param at_mobiles: @指定手机号列表（可选）
-    :param is_at_all: 是否@所有人（可选）
-    """
+def dingtalk_text(content):
     headers = {"Content-Type": "application/json"}
     data = {
-        "msgtype": "markdown",
-        "markdown": {
-            "title": title,
-            "text": content + f"\n\n**关键词：{KEYWORD}**"  # 必须包含自定义关键词
-        },
-        "at": {
-            "atMobiles": at_mobiles or [],
-            "isAtAll": is_at_all
+        "msgtype": "text",
+        "text": {
+            "content": content + f"\n\n关键词：{KEYWORD}"
         }
     }
-    try:
-        response = requests.post(DINGTALK_WEBHOOK, json=data, headers=headers, timeout=10)
-        response.raise_for_status()
-        resp_json = response.json()
-        print(f"钉钉消息发送状态: {response.status_code}, 响应: {resp_json}")
-        if resp_json.get("errcode", 0) != 0:
-            print(f"钉钉消息发送失败: {resp_json}")
-    except Exception as e:
-        print(f"钉钉消息发送异常: {e}")
+    response = requests.post(DINGTALK_WEBHOOK, json=data, headers=headers)
+    print(f"钉钉消息发送状态: {response.status_code}, 响应: {response.json()}")
 
 # @st.cache_data(ttl=3600, show_spinner=False)
 def calculate_market_overview(df):
@@ -79,6 +61,30 @@ def save_up_stocks_count(time_str, up_count):
     df.at[today, time_str] = up_count
     df.to_csv(filename)
 
+def send_up_stocks_csv_to_dingtalk():
+    """
+    读取up_stocks.csv，每行数据用 | 分隔，缺失数据用'----'占位，每行一行，拼成字符串后用dingtalk_text发送，确保钉钉换行。
+    """
+    try:
+        df = pd.read_csv('up_stocks.csv', index_col=0)
+        df.index = pd.to_datetime(df.index, errors='coerce', infer_datetime_format=True).strftime('%m-%d')
+        lines = []
+        header = ['日期'] + list(df.columns)
+        lines.append(' | '.join(header))
+        for idx, row in df.iterrows():
+            line = [str(idx)]
+            for col in df.columns:
+                val = row[col]
+                if pd.isna(val):
+                    val = ' ------ '
+                line.append(str(val))
+            lines.append(' | '.join(line))
+        msg = '\n'.join(lines)
+        dingtalk_text(msg)
+    except Exception as e:
+        print(f"读取up_stocks.csv失败: {e}")
+
+
 def hongpanjiashu():
     """
     获取实时数据并推送红盘家数，并将csv前5行以自定义文本格式通过钉钉发送（每行一行，字段用 | 分隔，避免钉钉竖表渲染问题）
@@ -90,23 +96,7 @@ def hongpanjiashu():
     save_up_stocks_count(now_str, up_count)
     print(f"{now_str} 上涨家数: {up_count} 已保存。")
     # 打印csv文件前5行，并构造自定义文本格式
-    try:
-        df = pd.read_csv('up_stocks.csv', index_col=0)
-        # 自动推断多种日期格式
-        df.index = pd.to_datetime(df.index, errors='coerce', infer_datetime_format=True).strftime('%m-%d')
-        print('up_stocks.csv 前5行:')
-        print(df.head())
-        md = df.head().reset_index()
-        lines = []
-        lines.append(' | '.join(md.columns))
-        for _, row in md.iterrows():
-            lines.append(' | '.join(str(x) if pd.notnull(x) else '' for x in row))
-        msg = "### 整点红盘家数\n" + '\n'.join(lines)
-        dingtalk_markdown(msg, title="整点红盘家数")
-    except Exception as e:
-        print(f"读取up_stocks.csv失败: {e}")
-    up_msg = f"### 🕘 {now_str} 红盘家数快报\n- 红盘家数: {up_count}\n\n{KEYWORD}"
-    dingtalk_markdown(up_msg)
+    send_up_stocks_csv_to_dingtalk()
 
 
 def hongpanjiashu_rtime_jobs():
@@ -126,6 +116,7 @@ def hongpanjiashu_rtime_jobs():
         scheduler.add_job(hongpanjiashu, 'cron', **t)
     print("红盘家数任务已启动, 9:25, 10:00, 11:00, 13:00, 14:00, 15:00, 等待触发...")
     scheduler.start()
+
 
 if __name__ == "__main__":
     hongpanjiashu_rtime_jobs()
