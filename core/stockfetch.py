@@ -10,6 +10,7 @@ import core.crawling.stock_hist_em as she
 import core.crawling.fund_etf_em as fee
 import core.tablestructure as tbs
 import core.database as mdb
+import core.trade_date_hist as tdh
 
 # 600 601 603 605开头的股票是上证A股
 # 600开头的股票是上证A股，属于大盘股，其中6006开头的股票是最早上市的股票，
@@ -38,6 +39,17 @@ def is_open(price):
 def is_open_with_line(price):
     return price != '-'
 
+# 读取股票交易日历数据
+def fetch_stocks_trade_date():
+    try:
+        data = tdh.tool_trade_date_hist_sina()
+        if data is None or len(data.index) == 0:
+            return None
+        data_date = set(data['trade_date'].values.tolist())
+        return data_date
+    except Exception as e:
+        logging.error(f"stockfetch.fetch_stocks_trade_date处理异常：{e}")
+    return None
 
 
 # 读取当天股票数据

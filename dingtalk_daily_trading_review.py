@@ -19,8 +19,8 @@ def schedule_jobs():
             main()
         else:
             print("非交易日，不执行推送。")
-    scheduler.add_job(job_if_workday, 'cron', hour=15, minute=30)
-    print("定时任务已启动，等待交易日15:30触发...")
+    scheduler.add_job(job_if_workday, 'cron', hour=16, minute=00)
+    print("定时任务已启动，等待交易日16:00触发...")
     scheduler.start()
 
 if __name__ == "__main__":
