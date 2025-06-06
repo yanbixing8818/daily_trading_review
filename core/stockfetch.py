@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 import core.crawling.stock_hist_em as she
+import core.crawling.fund_etf_em as fee
 import core.tablestructure as tbs
 import core.database as mdb
 
@@ -58,6 +59,24 @@ def fetch_stocks(date):
     return None
 
 
+# 读取当天基金etf数据
+def fetch_etfs(date):
+    try:
+        data = fee.fund_etf_spot_em()
+        if data is None or len(data.index) == 0:
+            return None
+        if date is None:
+            data.insert(0, 'date', datetime.datetime.now().strftime("%Y-%m-%d"))
+        else:
+            data.insert(0, 'date', date.strftime("%Y-%m-%d"))
+        data.columns = list(tbs.TABLE_CN_ETF_SPOT['columns'])
+        data = data.loc[data['new_price'].apply(is_open)]
+        return data
+    except Exception as e:
+        logging.error(f"stockfetch.fetch_etfs处理异常：{e}")
+    return None
+
+
 # 股票实时行情数据。
 def save_nph_stock_spot_data(date):
     # 股票列表
@@ -81,6 +100,32 @@ def save_nph_stock_spot_data(date):
         logging.error(f"basic_data_daily_job.save_stock_spot_data处理异常：{e}")
 
 
+# 基金实时行情数据。
+def save_nph_etf_spot_data(date):
+    # 基金etf列表
+    try:
+        data = fetch_etfs(date)
+        if data is None or len(data.index) == 0:
+            return
+
+        table_name = tbs.TABLE_CN_ETF_SPOT['name']
+        # 删除老数据。
+        if mdb.checkTableIsExist(table_name):
+            del_sql = f"DELETE FROM `{table_name}` where `date` = '{date}'"
+            mdb.executeSql(del_sql)
+            cols_type = None
+        else:
+            cols_type = tbs.get_field_types(tbs.TABLE_CN_ETF_SPOT['columns'])
+
+        mdb.insert_db_from_df(data, table_name, cols_type, False, "`date`,`code`")
+    except Exception as e:
+        logging.error(f"basic_data_daily_job.save_nph_etf_spot_data处理异常：{e}")
+
+
+
+
+
 
 if __name__ == "__main__":
-    save_nph_stock_spot_data(datetime.datetime.now())
+    # save_nph_stock_spot_data(datetime.datetime.now())
+    save_nph_etf_spot_data(datetime.datetime.now())

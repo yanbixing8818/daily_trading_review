@@ -49,6 +49,26 @@ TABLE_CN_STOCK_SPOT = {'name': 'cn_stock_spot', 'cn': '每日股票数据',
                                    'listing_date': {'type': DATE, 'cn': '上市时间', 'size': 110}}}
 
 
+TABLE_CN_ETF_SPOT = {'name': 'cn_etf_spot', 'cn': '每日ETF数据',
+                     'columns': {'date': {'type': DATE, 'cn': '日期', 'size': 0},
+                                 'code': {'type': VARCHAR(6, _COLLATE), 'cn': '代码', 'size': 60},
+                                 'name': {'type': VARCHAR(20, _COLLATE), 'cn': '名称', 'size': 120},
+                                 'new_price': {'type': FLOAT, 'cn': '最新价', 'size': 70},
+                                 'change_rate': {'type': FLOAT, 'cn': '涨跌幅', 'size': 70},
+                                 'ups_downs': {'type': FLOAT, 'cn': '涨跌额', 'size': 70},
+                                 'volume': {'type': BIGINT, 'cn': '成交量', 'size': 90},
+                                 'deal_amount': {'type': BIGINT, 'cn': '成交额', 'size': 100},
+                                 'open_price': {'type': FLOAT, 'cn': '开盘价', 'size': 70},
+                                 'high_price': {'type': FLOAT, 'cn': '最高价', 'size': 70},
+                                 'low_price': {'type': FLOAT, 'cn': '最低价', 'size': 70},
+                                 'pre_close_price': {'type': FLOAT, 'cn': '昨收', 'size': 70},
+                                 'turnoverrate': {'type': FLOAT, 'cn': '换手率', 'size': 70},
+                                 'total_market_cap': {'type': BIGINT, 'cn': '总市值', 'size': 120},
+                                 'free_cap': {'type': BIGINT, 'cn': '流通市值', 'size': 120}}}
+
+
+
+
 
 def get_field_types(cols):
     data = {}
