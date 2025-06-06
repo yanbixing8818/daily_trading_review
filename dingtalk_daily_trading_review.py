@@ -1,10 +1,11 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import dingtalk_subjob.all_a_stock_data_to_dingtalk as aasd
 import dingtalk_subjob.lianbantianti_to_dingtalk as lbtt
 import dingtalk_subjob.zhangdietingshuliang_to_dingtalk as zdtsl
 import dingtalk_subjob.zhangtingyuanyin_to_dingtalk as ztyy
-from apscheduler.schedulers.blocking import BlockingScheduler
-from chinese_calendar import is_workday
-from datetime import datetime
+from core.utils import schedule_trade_day_job
 
 def main():
     aasd.send_all_a_stock_data_to_dingtalk()
@@ -12,19 +13,8 @@ def main():
     zdtsl.send_zhangdietingshuliang_to_dingtalk()
     ztyy.send_zhangtingyuanyin_to_dingtalk()
 
-def schedule_jobs():
-    scheduler = BlockingScheduler(timezone="Asia/Shanghai")
-    def job_if_workday():
-        if is_workday(datetime.now()):
-            main()
-        else:
-            print("非交易日，不执行推送。")
-    scheduler.add_job(job_if_workday, 'cron', hour=16, minute=00)
-    print("定时任务已启动，等待交易日16:00触发...")
-    scheduler.start()
-
 if __name__ == "__main__":
-    schedule_jobs()
+    schedule_trade_day_job(main, 16, 0)
 
 
 
