@@ -49,22 +49,49 @@ TABLE_CN_STOCK_SPOT = {'name': 'cn_stock_spot', 'cn': '每日股票数据',
                                    'listing_date': {'type': DATE, 'cn': '上市时间', 'size': 110}}}
 
 
-TABLE_CN_ETF_SPOT = {'name': 'cn_etf_spot', 'cn': '每日ETF数据',
-                     'columns': {'date': {'type': DATE, 'cn': '日期', 'size': 0},
-                                 'code': {'type': VARCHAR(6, _COLLATE), 'cn': '代码', 'size': 60},
-                                 'name': {'type': VARCHAR(20, _COLLATE), 'cn': '名称', 'size': 120},
-                                 'new_price': {'type': FLOAT, 'cn': '最新价', 'size': 70},
-                                 'change_rate': {'type': FLOAT, 'cn': '涨跌幅', 'size': 70},
-                                 'ups_downs': {'type': FLOAT, 'cn': '涨跌额', 'size': 70},
-                                 'volume': {'type': BIGINT, 'cn': '成交量', 'size': 90},
-                                 'deal_amount': {'type': BIGINT, 'cn': '成交额', 'size': 100},
-                                 'open_price': {'type': FLOAT, 'cn': '开盘价', 'size': 70},
-                                 'high_price': {'type': FLOAT, 'cn': '最高价', 'size': 70},
-                                 'low_price': {'type': FLOAT, 'cn': '最低价', 'size': 70},
-                                 'pre_close_price': {'type': FLOAT, 'cn': '昨收', 'size': 70},
-                                 'turnoverrate': {'type': FLOAT, 'cn': '换手率', 'size': 70},
-                                 'total_market_cap': {'type': BIGINT, 'cn': '总市值', 'size': 120},
-                                 'free_cap': {'type': BIGINT, 'cn': '流通市值', 'size': 120}}}
+# 这段代码定义了一个名为 TABLE_CN_ETF_SPOT 的字典，用于描述“每日ETF数据”表的结构信息。
+# 主要内容如下：
+# - 'name': 数据库中表的名称，这里是 'cn_etf_spot'。
+# - 'cn': 表的中文名称，这里是 '每日ETF数据'。
+# - 'columns': 一个字典，定义了表中每一列的字段名、类型、中文名和显示宽度（size）。
+#   每个字段包含：
+#     - 'type': 字段在数据库中的数据类型（如DATE、VARCHAR、FLOAT、BIGINT等）。
+#     - 'cn': 字段的中文名称（如'日期'、'代码'、'最新价'等）。
+#     - 'size': 字段在前端展示时的宽度设置（仅用于UI展示，无数据库实际意义）。
+# 该结构主要用于自动化建表、数据校验、前端展示等场景，便于统一管理ETF行情数据的表结构。
+
+TABLE_CN_ETF_SPOT = {
+    'name': 'cn_etf_spot',           # 表名
+    'cn': '每日ETF数据',              # 中文表名
+    'columns': {                     # 字段定义
+        'date': {'type': DATE, 'cn': '日期', 'size': 0},
+        'code': {'type': VARCHAR(6, _COLLATE), 'cn': '代码', 'size': 60},
+        'name': {'type': VARCHAR(20, _COLLATE), 'cn': '名称', 'size': 120},
+        'new_price': {'type': FLOAT, 'cn': '最新价', 'size': 70},
+        'change_rate': {'type': FLOAT, 'cn': '涨跌幅', 'size': 70},
+        'ups_downs': {'type': FLOAT, 'cn': '涨跌额', 'size': 70},
+        'volume': {'type': BIGINT, 'cn': '成交量', 'size': 90},
+        'deal_amount': {'type': BIGINT, 'cn': '成交额', 'size': 100},
+        'open_price': {'type': FLOAT, 'cn': '开盘价', 'size': 70},
+        'high_price': {'type': FLOAT, 'cn': '最高价', 'size': 70},
+        'low_price': {'type': FLOAT, 'cn': '最低价', 'size': 70},
+        'pre_close_price': {'type': FLOAT, 'cn': '昨收', 'size': 70},
+        'turnoverrate': {'type': FLOAT, 'cn': '换手率', 'size': 70},
+        'total_market_cap': {'type': BIGINT, 'cn': '总市值', 'size': 120},
+        'free_cap': {'type': BIGINT, 'cn': '流通市值', 'size': 120}
+    }
+}
+
+
+TABLE_CN_BAOSTOCK_CODE_MAP = {
+    'name': 'cn_baostock_code_map',      # 表名
+    'cn': 'baostock股票代码映射表',            # 中文表名
+    'columns': {
+        'name': {'type': VARCHAR(20, _COLLATE), 'cn': '股票名称', 'size': 120},
+        'code': {'type': VARCHAR(10, _COLLATE), 'cn': '原始代码', 'size': 60},
+        'baostock_mapped_code': {'type': VARCHAR(20, _COLLATE), 'cn': 'baostock映射后代码', 'size': 80}
+    }
+}
 
 
 
