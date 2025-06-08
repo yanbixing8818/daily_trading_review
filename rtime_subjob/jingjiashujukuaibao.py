@@ -4,6 +4,7 @@ import pywencai
 import requests
 from datetime import datetime
 from chinese_calendar import is_workday
+from core.utils import schedule_trade_day_jobs
 
 
 # 钉钉机器人配置
@@ -34,6 +35,7 @@ def dingtalk_markdown(content):
     response = requests.post(DINGTALK_WEBHOOK, json=data, headers=headers)
     print(f"消息发送状态: {response.status_code}")
 
+
 def jingjiashujukuaibao():
     """定时任务主逻辑"""
     if not is_workday(datetime.now()):  # 排除节假日和周末
@@ -41,7 +43,7 @@ def jingjiashujukuaibao():
     data = get_auction_data()
     if data is not None:
         # 生成Markdown表格
-        markdown_content = "### 🕘 9:28 竞价数据快报\n"
+        markdown_content = "### 🕘 9:27 竞价数据快报\n"
         markdown_content += "| 代码 | 名称 |\n"
         markdown_content += "|------|------|\n"
         for _, row in data.iterrows():
@@ -50,10 +52,8 @@ def jingjiashujukuaibao():
         dingtalk_markdown(markdown_content)
 
 def jingjiashujukuaibao_rtime_jobs():
-    scheduler = BlockingScheduler(timezone="Asia/Shanghai")
-    scheduler.add_job(jingjiashujukuaibao, 'cron', hour=9, minute=27)
-    print("竞价数据快报任务已启动，等待交易日9:27触发...")
-    scheduler.start()
+    times = [(9, 27)]
+    schedule_trade_day_jobs(jingjiashujukuaibao, times)
 
 if __name__ == "__main__":
     jingjiashujukuaibao_rtime_jobs()

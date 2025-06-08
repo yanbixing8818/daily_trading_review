@@ -7,6 +7,7 @@ from core.crawling.stock_hist_em import stock_zh_a_spot_em
 import requests
 from apscheduler.schedulers.blocking import BlockingScheduler
 from chinese_calendar import is_workday
+from core.utils import schedule_trade_day_jobs
 
 # 钉钉机器人配置
 DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=294d72c5b9bffddcad4e0220070a9df8104e5e8a3f161461bf2839cfd163b471"
@@ -82,21 +83,9 @@ def shichanggailan():
 
 
 def shichanggailan_rtime_jobs():
-    """
-    启动定时任务，仅在交易日的10:00, 11:00, 13:00, 14:00, 15:00触发
-    """
-    scheduler = BlockingScheduler(timezone="Asia/Shanghai")
-    times = [
-        {"hour": 10, "minute": 0},
-        {"hour": 11, "minute": 0},
-        {"hour": 13, "minute": 0},
-        {"hour": 14, "minute": 0},
-        {"hour": 15, "minute": 0},
-    ]
-    for t in times:
-        scheduler.add_job(shichanggailan, 'cron', **t)
     print("市场概览任务已启动，交易日10:00, 11:00, 13:00, 14:00, 15:00触发，等待触发...")
-    scheduler.start()
+    times = [(10, 0), (11, 0), (13, 0), (14, 0), (15, 0)]
+    schedule_trade_day_jobs(shichanggailan, times)
 
 
 if __name__ == "__main__":

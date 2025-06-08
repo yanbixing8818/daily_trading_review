@@ -3,7 +3,7 @@
 
 import datetime
 import core.stockfetch as stf
-from core.utils import schedule_trade_day_job
+from core.utils import schedule_trade_day_jobs
 from core.stockfetch import fetch_stocks_trade_date
 
 def job():
@@ -13,5 +13,5 @@ def job():
 
 
 if __name__ == '__main__':
-    schedule_trade_day_job(job, 15, 30)
+    schedule_trade_day_jobs(job, [(15, 30)])
 

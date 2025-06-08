@@ -6,6 +6,7 @@ from datetime import datetime
 from core.crawling.stock_hist_em import stock_zh_a_spot_em
 import requests
 from apscheduler.schedulers.blocking import BlockingScheduler
+from core.utils import schedule_trade_day_jobs
 
 # 钉钉机器人配置
 DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=294d72c5b9bffddcad4e0220070a9df8104e5e8a3f161461bf2839cfd163b471"
@@ -99,25 +100,10 @@ def hongpanjiashu():
     # 打印csv文件前5行，并构造自定义文本格式
     send_up_stocks_csv_to_dingtalk()
 
-
 def hongpanjiashu_rtime_jobs():
-    """
-    启动定时任务，在指定时间点推送红盘家数
-    """
-    scheduler = BlockingScheduler(timezone="Asia/Shanghai")
-    times = [
-        {"hour": 9, "minute": 25},
-        {"hour": 10, "minute": 0},
-        {"hour": 11, "minute": 0},
-        {"hour": 13, "minute": 0},
-        {"hour": 14, "minute": 0},
-        {"hour": 15, "minute": 0},
-    ]
-    for t in times:
-        scheduler.add_job(hongpanjiashu, 'cron', **t)
     print("红盘家数任务已启动, 9:25, 10:00, 11:00, 13:00, 14:00, 15:00, 等待触发...")
-    scheduler.start()
-
+    times = [(9, 25), (10, 0), (11, 0), (13, 0), (14, 0), (15, 0)]
+    schedule_trade_day_jobs(hongpanjiashu, times)
 
 if __name__ == "__main__":
     hongpanjiashu_rtime_jobs()
