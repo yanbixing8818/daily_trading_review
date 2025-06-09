@@ -6,6 +6,7 @@ import core.database as mdb
 import datetime
 import logging
 import core.trade_time as trade_time
+import csv
 
 # 覆写数据库名和相关连接参数
 mdb.db_database = "stock_hist"  # 替换为你想用的数据库名
@@ -122,8 +123,264 @@ def read_baostock_code_map_table():
     except Exception as e:
         logging.error(f"read_baostock_code_map_table处理异常：{e}")
 
+def calc_max_rise_for_all_stocks():
+    """
+    遍历所有股票历史表，分别计算每个股票的30日、10日最大涨幅。
+    最大涨幅 = 期间内最高收盘/最低收盘 - 1
+    结果分别按30日和10日最大涨幅排序，保存到数据库表。
+    """
+    # 获取所有表名
+    sql = f"SELECT table_name FROM information_schema.tables WHERE table_schema='{mdb.db_database}'"
+    tables = mdb.executeSqlFetch(sql)
+    if not tables:
+        print("未获取到表名")
+        return
+    # 获取股票代码和名称的映射
+    code_map = {}
+    map_table = tbs.TABLE_CN_BAOSTOCK_CODE_MAP['name']
+    map_rows = mdb.executeSqlFetch(f"SELECT code, name FROM `{map_table}`")
+    if map_rows:
+        code_map = {str(code): name for code, name in map_rows}
+    results = []
+    for (table_name,) in tables:
+        # 只处理6位数字的表名
+        if not (isinstance(table_name, str) and len(table_name) == 6 and table_name.isdigit()):
+            continue
+        # 读取表数据
+        sql = f"SELECT date, close FROM `{table_name}` ORDER BY date DESC LIMIT 30"
+        rows = mdb.executeSqlFetch(sql)
+        if not rows or len(rows) < 2:
+            continue
+        # 30日最大涨幅及日期
+        closes_30 = [(r[0], float(r[1])) for r in rows if r[1] is not None]
+        if len(closes_30) < 2:
+            continue
+        max_30_val = max(closes_30, key=lambda x: x[1])
+        min_30_val = min(closes_30, key=lambda x: x[1])
+        rise_30 = (max_30_val[1] / min_30_val[1] - 1) if min_30_val[1] > 0 else None
+        max_30_date = max_30_val[0]
+        min_30_date = min_30_val[0]
+        # 10日最大涨幅及日期
+        closes_10 = closes_30[:10] if len(closes_30) >= 10 else closes_30
+        if len(closes_10) >= 2:
+            max_10_val = max(closes_10, key=lambda x: x[1])
+            min_10_val = min(closes_10, key=lambda x: x[1])
+            rise_10 = (max_10_val[1] / min_10_val[1] - 1) if min_10_val[1] > 0 else None
+            max_10_date = max_10_val[0]
+            min_10_date = min_10_val[0]
+        else:
+            rise_10 = None
+            max_10_date = None
+            min_10_date = None
+        stock_name = code_map.get(table_name, "")
+        results.append((table_name, stock_name, rise_30, max_30_date, min_30_date, rise_10, max_10_date, min_10_date))
+    # 打印结果
+    print("股票代码 | 股票名称 | 30日最大涨幅 | 最高价日 | 最低价日 | 10日最大涨幅 | 最高价日 | 最低价日")
+    for code, name, r30, dmax30, dmin30, r10, dmax10, dmin10 in results:
+        print(f"{code} | {name} | {r30:.2%} | {dmax30} | {dmin30} | {r10:.2%} | {dmax10} | {dmin10}")
+    # 保存到数据库表
+    df = pd.DataFrame(results, columns=["code", "name", "max_rise_30d", "max_30d_date", "min_30d_date", "max_rise_10d", "max_10d_date", "min_10d_date"])
+    df["code"] = df["code"].astype(str).str.zfill(6)
+    df_30 = df.sort_values(by="max_rise_30d", ascending=False)[["code", "name", "max_rise_30d", "max_30d_date", "min_30d_date"]].copy()
+    df_10 = df.sort_values(by="max_rise_10d", ascending=False)[["code", "name", "max_rise_10d", "max_10d_date", "min_10d_date"]].copy()
+    df_30["code"] = df_30["code"].astype(str).str.zfill(6)
+    df_10["code"] = df_10["code"].astype(str).str.zfill(6)
+    # 保存到SQL表
+    mdb.executeSql(f"DROP TABLE IF EXISTS max_rise_30d")
+    mdb.executeSql(f"DROP TABLE IF EXISTS max_rise_10d")
+    df_30.to_sql("max_rise_30d", mdb.engine(), if_exists="replace", index=False)
+    df_10.to_sql("max_rise_10d", mdb.engine(), if_exists="replace", index=False)
+    print("已保存到数据库表 max_rise_30d 和 max_rise_10d")
+
+def detect_main_board_abnormal():
+    """
+    检测主板异动：读取max_rise_10d表，找出10日涨幅超过100%的股票，打印其信息，并备注（日期）已经严重异动。
+    也筛选今日收盘价大于10日前最低价*2的主板股票。
+    """
+    try:
+        df = pd.read_sql("SELECT * FROM max_rise_10d", mdb.engine())
+    except Exception as e:
+        print(f"读取max_rise_10d表失败: {e}")
+        return
+    # 只筛选主板股票
+    main_board_prefix = ("600", "601", "603", "605", "000", "001", "002", "003")
+    df = df[df["code"].astype(str).str.zfill(6).str.startswith(main_board_prefix)]
+    # 过滤10日涨幅超过100%的
+    abnormal = df[df["max_rise_10d"] > 1]
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    if not abnormal.empty:
+        for _, row in abnormal.iterrows():
+            print(f"股票代码: {row['code']} | 名称: {row['name']} | 10日最大涨幅: {row['max_rise_10d']:.2%} | 最高价日: {row['max_10d_date']} | 最低价日: {row['min_10d_date']} | {today} 已经严重异动")
+    else:
+        print("无10日涨幅超过100%的主板股票")
+    
+    # 进一步筛选 (今日收盘价 * 1.1 / 10日最低价) > 100% 的主板股票（排除已在abnormal中的票）
+    abnormal_codes = set(abnormal["code"].astype(str).str.zfill(6))
+    for _, row in df.iterrows():
+        code = str(row['code']).zfill(6)
+        if code in abnormal_codes:
+            continue  # 已经在10日涨幅>100%的票中，跳过
+        min_10d_date = row['min_10d_date']
+        try:
+            # 取最新一条收盘价
+            sql = f"SELECT close FROM `{code}` WHERE close IS NOT NULL ORDER BY date DESC LIMIT 1"
+            latest = mdb.executeSqlFetch(sql)
+            if not latest or latest[0][0] is None:
+                continue
+            latest_close = float(latest[0][0])
+            # 取10日区间最低价
+            sql = f"SELECT close FROM `{code}` WHERE date = '{min_10d_date}' AND close IS NOT NULL LIMIT 1"
+            min_10d = mdb.executeSqlFetch(sql)
+            if not min_10d or min_10d[0][0] is None:
+                continue
+            min_10d_close = float(min_10d[0][0])
+            # 判断 (今日收盘价 * 1.1 / 10日最低价) > 2
+            if min_10d_close > 0 and (latest_close * 1.1 / min_10d_close) > 2:
+                # 计算涨幅2
+                zf2 = (min_10d_close * 2 - latest_close) / latest_close
+                print(f"股票代码: {row['code']} | 名称: {row['name']} | 最新收盘价: {latest_close} | 10日前最低价: {min_10d_close} | 10日前最低价日: {min_10d_date} | {today} 如果明天涨幅2（(10日最低价*2-今日收盘价)/今日收盘价 = {zf2:.2%}），则严重异动")
+        except Exception as e:
+            print(f"处理股票{code}时异常: {e}")
+
+def detect_gem_and_star_board_abnormal():
+    """
+    检测创业板+科创板异动：
+    1. 10日涨幅超过100%的创业板/科创板股票
+    2. (今日收盘价 * 1.2 / 10日最低价) > 2 的创业板/科创板股票（排除已在abnormal中的票）
+    """
+    try:
+        df = pd.read_sql("SELECT * FROM max_rise_10d", mdb.engine())
+    except Exception as e:
+        print(f"读取max_rise_10d表失败: {e}")
+        return
+    # 创业板（300/301开头），科创板（688开头）
+    gem_star_prefix = ("300", "301", "688")
+    df = df[df["code"].astype(str).str.zfill(6).str.startswith(gem_star_prefix)]
+    # 10日涨幅超过100%
+    abnormal = df[df["max_rise_10d"] > 1]
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    if not abnormal.empty:
+        for _, row in abnormal.iterrows():
+            print(f"[创业/科创] 股票代码: {row['code']} | 名称: {row['name']} | 10日最大涨幅: {row['max_rise_10d']:.2%} | 最高价日: {row['max_10d_date']} | 最低价日: {row['min_10d_date']} | {today} 已经严重异动")
+    else:
+        print("无10日涨幅超过100%的创业/科创板股票")
+    # 进一步筛选 (今日收盘价 * 1.2 / 10日最低价) > 2，排除已在abnormal中的票
+    abnormal_codes = set(abnormal["code"].astype(str).str.zfill(6))
+    for _, row in df.iterrows():
+        code = str(row['code']).zfill(6)
+        if code in abnormal_codes:
+            continue
+        min_10d_date = row['min_10d_date']
+        try:
+            sql = f"SELECT close FROM `{code}` WHERE close IS NOT NULL ORDER BY date DESC LIMIT 1"
+            latest = mdb.executeSqlFetch(sql)
+            if not latest or latest[0][0] is None:
+                continue
+            latest_close = float(latest[0][0])
+            sql = f"SELECT close FROM `{code}` WHERE date = '{min_10d_date}' AND close IS NOT NULL LIMIT 1"
+            min_10d = mdb.executeSqlFetch(sql)
+            if not min_10d or min_10d[0][0] is None:
+                continue
+            min_10d_close = float(min_10d[0][0])
+            if min_10d_close > 0 and (latest_close * 1.2 / min_10d_close) > 2:
+                zf2 = (min_10d_close * 2 - latest_close) / latest_close
+                print(f"[创业/科创] 股票代码: {row['code']} | 名称: {row['name']} | 最新收盘价: {latest_close} | 10日前最低价: {min_10d_close} | 10日前最低价日: {min_10d_date} | {today} 收盘价*1.2已较10日前最低价上涨超100%，已经严重异动，涨幅2（(10日最低价*2-今日收盘价)/今日收盘价 = {zf2:.2%}）")
+        except Exception as e:
+            print(f"处理股票{code}时异常: {e}")
+
+def detect_main_board_abnormal_30d():
+    """
+    检测主板30日异动：读取max_rise_30d表，找出30日涨幅超过200%的股票，打印其信息，并备注（日期）已经严重异动。
+    也筛选 (今日收盘价 * 1.1 / 30日最低价) > 2 的主板股票（排除已在abnormal中的票），并给出明天涨2%到2倍的提示。
+    """
+    try:
+        df = pd.read_sql("SELECT * FROM max_rise_30d", mdb.engine())
+    except Exception as e:
+        print(f"读取max_rise_30d表失败: {e}")
+        return
+    main_board_prefix = ("600", "601", "603", "605", "000", "001", "002", "003")
+    df = df[df["code"].astype(str).str.zfill(6).str.startswith(main_board_prefix)]
+    abnormal = df[df["max_rise_30d"] > 2]
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    if not abnormal.empty:
+        for _, row in abnormal.iterrows():
+            print(f"[30日] 股票代码: {row['code']} | 名称: {row['name']} | 30日最大涨幅: {row['max_rise_30d']:.2%} | 最高价日: {row['max_30d_date']} | 最低价日: {row['min_30d_date']} | {today} 已经严重异动")
+    else:
+        print("无30日涨幅超过200%的主板股票")
+    abnormal_codes = set(abnormal["code"].astype(str).str.zfill(6))
+    for _, row in df.iterrows():
+        code = str(row['code']).zfill(6)
+        if code in abnormal_codes:
+            continue
+        min_30d_date = row['min_30d_date']
+        try:
+            sql = f"SELECT close FROM `{code}` WHERE close IS NOT NULL ORDER BY date DESC LIMIT 1"
+            latest = mdb.executeSqlFetch(sql)
+            if not latest or latest[0][0] is None:
+                continue
+            latest_close = float(latest[0][0])
+            sql = f"SELECT close FROM `{code}` WHERE date = '{min_30d_date}' AND close IS NOT NULL LIMIT 1"
+            min_30d = mdb.executeSqlFetch(sql)
+            if not min_30d or min_30d[0][0] is None:
+                continue
+            min_30d_close = float(min_30d[0][0])
+            # 判断 (今日收盘价 * 1.1 / 30日最低价) > 2
+            if min_30d_close > 0 and (latest_close * 1.1 / min_30d_close) > 2:
+                zf2 = (min_30d_close * 2 - latest_close) / latest_close
+                print(f"[30日] 股票代码: {row['code']} | 名称: {row['name']} | 最新收盘价: {latest_close} | 30日前最低价: {min_30d_close} | 30日前最低价日: {min_30d_date} | {today} 如果明天涨幅2（(30日最低价*2-今日收盘价)/今日收盘价 = {zf2:.2%}），则严重异动")
+        except Exception as e:
+            print(f"处理股票{code}时异常: {e}")
+
+def detect_gem_and_star_board_abnormal_30d():
+    """
+    检测创业板+科创板30日异动：
+    1. 30日涨幅超过200%的创业板/科创板股票
+    2. (今日收盘价 * 1.2 / 30日最低价) > 2 的创业板/科创板股票（排除已在abnormal中的票），并给出明天涨2%到2倍的提示。
+    """
+    try:
+        df = pd.read_sql("SELECT * FROM max_rise_30d", mdb.engine())
+    except Exception as e:
+        print(f"读取max_rise_30d表失败: {e}")
+        return
+    gem_star_prefix = ("300", "301", "688")
+    df = df[df["code"].astype(str).str.zfill(6).str.startswith(gem_star_prefix)]
+    abnormal = df[df["max_rise_30d"] > 2]
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    if not abnormal.empty:
+        for _, row in abnormal.iterrows():
+            print(f"[创业/科创-30日] 股票代码: {row['code']} | 名称: {row['name']} | 30日最大涨幅: {row['max_rise_30d']:.2%} | 最高价日: {row['max_30d_date']} | 最低价日: {row['min_30d_date']} | {today} 已经严重异动")
+    else:
+        print("无30日涨幅超过200%的创业/科创板股票")
+    abnormal_codes = set(abnormal["code"].astype(str).str.zfill(6))
+    for _, row in df.iterrows():
+        code = str(row['code']).zfill(6)
+        if code in abnormal_codes:
+            continue
+        min_30d_date = row['min_30d_date']
+        try:
+            sql = f"SELECT close FROM `{code}` WHERE close IS NOT NULL ORDER BY date DESC LIMIT 1"
+            latest = mdb.executeSqlFetch(sql)
+            if not latest or latest[0][0] is None:
+                continue
+            latest_close = float(latest[0][0])
+            sql = f"SELECT close FROM `{code}` WHERE date = '{min_30d_date}' AND close IS NOT NULL LIMIT 1"
+            min_30d = mdb.executeSqlFetch(sql)
+            if not min_30d or min_30d[0][0] is None:
+                continue
+            min_30d_close = float(min_30d[0][0])
+            if min_30d_close > 0 and (latest_close * 1.2 / min_30d_close) > 2:
+                zf2 = (min_30d_close * 2 - latest_close) / latest_close
+                print(f"[创业/科创-30日] 股票代码: {row['code']} | 名称: {row['name']} | 最新收盘价: {latest_close} | 30日前最低价: {min_30d_close} | 30日前最低价日: {min_30d_date} | {today} 收盘价*1.2已较30日前最低价上涨超200%，已经严重异动，涨幅2（(30日最低价*2-今日收盘价)/今日收盘价 = {zf2:.2%}）")
+        except Exception as e:
+            print(f"处理股票{code}时异常: {e}")
+
 if __name__ == "__main__":
-    table_name = tbs.TABLE_CN_BAOSTOCK_CODE_MAP['name']
-    if not mdb.checkTableIsExist(table_name):
-        create_baostock_code_map_table()
-    read_baostock_code_map_table()
+    # table_name = tbs.TABLE_CN_BAOSTOCK_CODE_MAP['name']
+    # if not mdb.checkTableIsExist(table_name):
+    #     create_baostock_code_map_table()
+    # read_baostock_code_map_table()
+    # calc_max_rise_for_all_stocks()
+    detect_main_board_abnormal()
+    detect_gem_and_star_board_abnormal()
+    detect_main_board_abnormal_30d()
+    detect_gem_and_star_board_abnormal_30d()
