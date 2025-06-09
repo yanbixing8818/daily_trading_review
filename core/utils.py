@@ -25,12 +25,19 @@ def schedule_trade_day_jobs(job_func, times, timezone="Asia/Shanghai"):
     """
     scheduler = BlockingScheduler(timezone=timezone)
     def job_if_trade_day():
-        if is_trade_date(datetime.now().date()):
+        if is_trade_date(datetime.datetime.now().date()):
             job_func()
         else:
-            print(f"{datetime.now().strftime('%Y-%m-%d')} 非交易日，不执行任务。")
+            print(f"{datetime.datetime.now().strftime('%Y-%m-%d')} 非交易日，不执行任务。")
     for hour, minute in times:
         scheduler.add_job(job_if_trade_day, 'cron', hour=hour, minute=minute)
         print(f"定时任务已启动，等待交易日{hour:02d}:{minute:02d}触发...")
     scheduler.start()
 
+
+def test_job():
+    print("Job triggered at", datetime.datetime.now())
+    print("Scheduler started")
+
+if __name__ == "__main__":
+    schedule_trade_day_jobs(test_job, [(10, 21)])
