@@ -9,16 +9,6 @@ import pandas as pd
 import math
 from functools import lru_cache
 
-# 隧道域名:端口号
-tunnel = "s166.kdltpspro.com:15818"
-
-# 用户名密码方式
-username = "t14858779685527"
-password = "atqk339v"
-proxies = {
-    "http": "http://%(user)s:%(pwd)s@%(proxy)s/" % {"user": username, "pwd": password, "proxy": tunnel},
-    "https": "http://%(user)s:%(pwd)s@%(proxy)s/" % {"user": username, "pwd": password, "proxy": tunnel}
-}
 
 def stock_zh_a_spot_em() -> pd.DataFrame:
     """
@@ -342,9 +332,7 @@ def stock_zh_a_hist(
         "end": end_date,
         "_": "1623766962675",
     }
-    r = requests.get(url, params=params, proxies=proxies)
-    print(f"状态码: {r.status_code}")
-    print(f"响应内容: {r.text}")
+    r = requests.get(url, params=params)
     data_json = r.json()
     if not (data_json["data"] and data_json["data"]["klines"]):
         return pd.DataFrame()
