@@ -131,8 +131,7 @@ def read_baostock_code_map_table():
 
 def calc_max_rise_for_all_stocks():
     """
-    遍历所有股票历史表，分别计算每个股票的30日、10日最大涨幅。
-    最大涨幅 = 期间内最高收盘/最低收盘 - 1
+    遍历所有股票历史表，只查一次最近30日数据，同时计算每个股票的30日、10日最大涨幅（最高价日必须在最低价日之后）。
     结果分别按30日和10日最大涨幅排序，保存到数据库表。
     """
     # 获取所有表名
@@ -147,239 +146,122 @@ def calc_max_rise_for_all_stocks():
     map_rows = mdb.executeSqlFetch(f"SELECT code, name FROM `{map_table}`")
     if map_rows:
         code_map = {str(code): name for code, name in map_rows}
-    results = []
+    results_30 = []
+    results_10 = []
     for (table_name,) in tables:
         # 只处理6位数字的表名
         if not (isinstance(table_name, str) and len(table_name) == 6 and table_name.isdigit()):
             continue
-        # 读取表数据
-        sql = f"SELECT date, close FROM `{table_name}` ORDER BY date DESC LIMIT 30"
+        # 读取表数据，按日期升序排列
+        sql = f"SELECT date, close FROM `{table_name}` WHERE close IS NOT NULL ORDER BY date ASC LIMIT 30"
         rows = mdb.executeSqlFetch(sql)
         if not rows or len(rows) < 2:
             continue
-        # 30日最大涨幅及日期
-        closes_30 = [(r[0], float(r[1])) for r in rows if r[1] is not None]
-        if len(closes_30) < 2:
+        df = pd.DataFrame(rows, columns=["date", "close"])
+        df["close"] = pd.to_numeric(df["close"], errors="coerce")
+        df = df.dropna(subset=["close"]).reset_index(drop=True)
+        if len(df) < 2:
             continue
-        max_30_val = max(closes_30, key=lambda x: x[1])
-        min_30_val = min(closes_30, key=lambda x: x[1])
-        rise_30 = (max_30_val[1] / min_30_val[1] - 1) if min_30_val[1] > 0 else None
-        max_30_date = max_30_val[0]
-        min_30_date = min_30_val[0]
-        # 10日最大涨幅及日期
-        closes_10 = closes_30[:10] if len(closes_30) >= 10 else closes_30
-        if len(closes_10) >= 2:
-            max_10_val = max(closes_10, key=lambda x: x[1])
-            min_10_val = min(closes_10, key=lambda x: x[1])
-            rise_10 = (max_10_val[1] / min_10_val[1] - 1) if min_10_val[1] > 0 else None
-            max_10_date = max_10_val[0]
-            min_10_date = min_10_val[0]
-        else:
-            rise_10 = None
-            max_10_date = None
-            min_10_date = None
+        # 计算30日最大涨幅（最高价日>最低价日）
+        def max_rise_window(df, window):
+            max_rise = -float('inf')
+            min_date = max_date = None
+            min_val = max_val = None
+            for i in range(len(df) - window + 1):
+                w = df.iloc[i:i+window]
+                for j in range(len(w)):
+                    for k in range(j+1, len(w)):
+                        if w.iloc[k]['close'] > 0 and w.iloc[j]['close'] > 0:
+                            rise = w.iloc[k]['close'] / w.iloc[j]['close'] - 1
+                            if rise > max_rise:
+                                max_rise = rise
+                                min_val = w.iloc[j]['close']
+                                max_val = w.iloc[k]['close']
+                                min_date = w.iloc[j]['date']
+                                max_date = w.iloc[k]['date']
+            return max_rise if max_rise != -float('inf') else None, min_date, max_date
+        # 30日
+        rise_30, min_30_date, max_30_date = max_rise_window(df, 30)
+        # 10日
+        rise_10, min_10_date, max_10_date = max_rise_window(df, 10)
         stock_name = code_map.get(table_name, "")
-        results.append((table_name, stock_name, rise_30, max_30_date, min_30_date, rise_10, max_10_date, min_10_date))
-    # 打印结果
-    print("股票代码 | 股票名称 | 30日最大涨幅 | 最高价日 | 最低价日 | 10日最大涨幅 | 最高价日 | 最低价日")
-    for code, name, r30, dmax30, dmin30, r10, dmax10, dmin10 in results:
-        print(f"{code} | {name} | {r30:.2%} | {dmax30} | {dmin30} | {r10:.2%} | {dmax10} | {dmin10}")
-    # 保存到数据库表
-    df = pd.DataFrame(results, columns=["code", "name", "max_rise_30d", "max_30d_date", "min_30d_date", "max_rise_10d", "max_10d_date", "min_10d_date"])
-    df["code"] = df["code"].astype(str).str.zfill(6)
-    df_30 = df.sort_values(by="max_rise_30d", ascending=False)[["code", "name", "max_rise_30d", "max_30d_date", "min_30d_date"]].copy()
-    df_10 = df.sort_values(by="max_rise_10d", ascending=False)[["code", "name", "max_rise_10d", "max_10d_date", "min_10d_date"]].copy()
+        results_30.append((table_name, stock_name, rise_30, max_30_date, min_30_date))
+        results_10.append((table_name, stock_name, rise_10, max_10_date, min_10_date))
+    # 保存到SQL表
+    df_30 = pd.DataFrame(results_30, columns=["code", "name", "max_rise_30d", "max_30d_date", "min_30d_date"])
+    df_10 = pd.DataFrame(results_10, columns=["code", "name", "max_rise_10d", "max_10d_date", "min_10d_date"])
     df_30["code"] = df_30["code"].astype(str).str.zfill(6)
     df_10["code"] = df_10["code"].astype(str).str.zfill(6)
-    # 保存到SQL表
     mdb.executeSql(f"DROP TABLE IF EXISTS max_rise_30d")
     mdb.executeSql(f"DROP TABLE IF EXISTS max_rise_10d")
     df_30.to_sql("max_rise_30d", mdb.engine(), if_exists="replace", index=False)
     df_10.to_sql("max_rise_10d", mdb.engine(), if_exists="replace", index=False)
     print("已保存到数据库表 max_rise_30d 和 max_rise_10d")
 
-def detect_main_board_abnormal():
+def detect_abnormal(period=10, board_type='main'):
     """
-    检测主板异动：读取max_rise_10d表，找出10日涨幅超过100%的股票，打印其信息，并备注（日期）已经严重异动。
-    也筛选今日收盘价大于10日前最低价*2的主板股票。
+    通用异动检测函数。
+    period: 10或30
+    board_type: 'main'（主板）或 'gem_star'（创业/科创板）
     """
+    import pandas as pd
+    from datetime import datetime
+    if period == 10:
+        table = 'max_rise_10d'
+        rise_threshold = 1
+        extra_threshold = 2
+    else:
+        table = 'max_rise_30d'
+        rise_threshold = 2
+        extra_threshold = 3
+    if board_type == 'main':
+        prefix = ("600", "601", "603", "605", "000", "001", "002", "003")
+        extra_ratio = 1.1
+        board_name = '主板'
+    else:
+        prefix = ("300", "301", "688")
+        extra_ratio = 1.2
+        board_name = '创业/科创板'
     try:
-        df = pd.read_sql("SELECT * FROM max_rise_10d", mdb.engine())
+        df = pd.read_sql(f"SELECT * FROM {table}", mdb.engine())
     except Exception as e:
-        print(f"读取max_rise_10d表失败: {e}")
+        print(f"读取{table}表失败: {e}")
         return
-    # 只筛选主板股票
-    main_board_prefix = ("600", "601", "603", "605", "000", "001", "002", "003")
-    df = df[df["code"].astype(str).str.zfill(6).str.startswith(main_board_prefix)]
-
-    # 过滤10日涨幅超过100%的
-    abnormal = df[df["max_rise_10d"] > 1]
+    df = df[df["code"].astype(str).str.zfill(6).str.startswith(prefix)]
+    # 只保留最高价日>最低价日的记录
+    max_col = f"max_{period}d_date"
+    min_col = f"min_{period}d_date"
+    rise_col = f"max_rise_{period}d"
+    df = df[df[max_col] > df[min_col]].copy()
+    # 1. 最大涨幅超过阈值
+    abnormal = df[df[rise_col] > rise_threshold]
     today = datetime.now().strftime("%Y-%m-%d")
     if not abnormal.empty:
         for _, row in abnormal.iterrows():
-            print(f"股票代码: {row['code']} | 名称: {row['name']} | 10日最大涨幅: {row['max_rise_10d']:.2%} | 最高价日: {row['max_10d_date']} | 最低价日: {row['min_10d_date']} | {today} 已经严重异动")
+            print(f"[{board_name}-{period}日] 股票代码: {row['code']} | 名称: {row['name']} | {period}日最大涨幅: {row[rise_col]:.2%} | 最高价日: {row[max_col]} | 最低价日: {row[min_col]} | 当前涨幅: {row[rise_col]:.2%} | {today} 已严重异动")
     else:
-        print("无10日涨幅超过100%的主板股票")
-    
-    # 进一步筛选 (今日收盘价 * 1.1 / 10日最低价) > 100% 的主板股票（排除已在abnormal中的票）
-    abnormal_codes = set(abnormal["code"].astype(str).str.zfill(6))
-    for _, row in df.iterrows():
-        code = str(row['code']).zfill(6)
-        if code in abnormal_codes:
-            continue  # 已经在10日涨幅>100%的票中，跳过
-        min_10d_date = row['min_10d_date']
-        try:
-            # 取最新一条收盘价
-            sql = f"SELECT close FROM `{code}` WHERE close IS NOT NULL ORDER BY date DESC LIMIT 1"
-            latest = mdb.executeSqlFetch(sql)
-            if not latest or latest[0][0] is None:
-                continue
-            latest_close = float(latest[0][0])
-            # 取10日区间最低价
-            sql = f"SELECT close FROM `{code}` WHERE date = '{min_10d_date}' AND close IS NOT NULL LIMIT 1"
-            min_10d = mdb.executeSqlFetch(sql)
-            if not min_10d or min_10d[0][0] is None:
-                continue
-            min_10d_close = float(min_10d[0][0])
-            # 判断 (今日收盘价 * 1.1 / 10日最低价) > 2
-            if min_10d_close > 0 and (latest_close * 1.1 / min_10d_close) > 2:
-                # 计算涨幅2
-                zf2 = (min_10d_close * 2 - latest_close) / latest_close
-                print(f"股票代码: {row['code']} | 名称: {row['name']} | 最新收盘价: {latest_close} | 10日前最低价: {min_10d_close} | 10日前最低价日: {min_10d_date} | 当前涨幅: {(latest_close / min_10d_close - 1):.2%} | {today} 如果明天涨幅{zf2:.2%}，将严重异动")
-        except Exception as e:
-            print(f"处理股票{code}时异常: {e}")
-
-def detect_gem_and_star_board_abnormal():
-    """
-    检测创业板+科创板异动：
-    1. 10日涨幅超过100%的创业板/科创板股票
-    2. (今日收盘价 * 1.2 / 10日最低价) > 2 的创业板/科创板股票（排除已在abnormal中的票）
-    """
-    try:
-        df = pd.read_sql("SELECT * FROM max_rise_10d", mdb.engine())
-    except Exception as e:
-        print(f"读取max_rise_10d表失败: {e}")
-        return
-    # 创业板（300/301开头），科创板（688开头）
-    gem_star_prefix = ("300", "301", "688")
-    df = df[df["code"].astype(str).str.zfill(6).str.startswith(gem_star_prefix)]
-
-    # 10日涨幅超过100%
-    abnormal = df[df["max_rise_10d"] > 1]
-    today = datetime.now().strftime("%Y-%m-%d")
-    if not abnormal.empty:
-        for _, row in abnormal.iterrows():
-            print(f"[创业/科创] 股票代码: {row['code']} | 名称: {row['name']} | 10日最大涨幅: {row['max_rise_10d']:.2%} | 最高价日: {row['max_10d_date']} | 最低价日: {row['min_10d_date']} | 当前涨幅: {row['max_rise_10d']:.2%} | {today} 已经严重异动")
-    else:
-        print("无10日涨幅超过100%的创业/科创板股票")
-
-    # 进一步筛选 (今日收盘价 * 1.2 / 10日最低价) > 2，排除已在abnormal中的票
+        print(f"无{period}日涨幅超过{rise_threshold*100:.0f}%的{board_name}股票")
+    # 2. 进一步筛选"今日收盘价*extra_ratio/最低价 > extra_threshold"
     abnormal_codes = set(abnormal["code"].astype(str).str.zfill(6))
     for _, row in df.iterrows():
         code = str(row['code']).zfill(6)
         if code in abnormal_codes:
             continue
-        min_10d_date = row['min_10d_date']
+        min_date = row[min_col]
         try:
             sql = f"SELECT close FROM `{code}` WHERE close IS NOT NULL ORDER BY date DESC LIMIT 1"
             latest = mdb.executeSqlFetch(sql)
             if not latest or latest[0][0] is None:
                 continue
             latest_close = float(latest[0][0])
-            sql = f"SELECT close FROM `{code}` WHERE date = '{min_10d_date}' AND close IS NOT NULL LIMIT 1"
-            min_10d = mdb.executeSqlFetch(sql)
-            if not min_10d or min_10d[0][0] is None:
+            sql = f"SELECT close FROM `{code}` WHERE date = '{min_date}' AND close IS NOT NULL LIMIT 1"
+            min_close = mdb.executeSqlFetch(sql)
+            if not min_close or min_close[0][0] is None:
                 continue
-            min_10d_close = float(min_10d[0][0])
-            if min_10d_close > 0 and (latest_close * 1.2 / min_10d_close) > 2:
-                zf2 = (min_10d_close * 2 - latest_close) / latest_close
-                print(f"[创业/科创] 股票代码: {row['code']} | 名称: {row['name']} | 最新收盘价: {latest_close} | 10日前最低价: {min_10d_close} | 10日前最低价日: {min_10d_date} | 当前涨幅: {(latest_close / min_10d_close - 1):.2%} | 明日涨幅{zf2:.2%}将严重异动")
-        except Exception as e:
-            print(f"处理股票{code}时异常: {e}")
-
-def detect_main_board_abnormal_30d():
-    """
-    检测主板30日异动：读取max_rise_30d表，找出30日涨幅超过200%的股票，打印其信息，并备注（日期）已经严重异动。
-    也筛选 (今日收盘价 * 1.1 / 30日最低价) > 2 的主板股票（排除已在abnormal中的票），并给出明天涨2%到2倍的提示。
-    """
-    try:
-        df = pd.read_sql("SELECT * FROM max_rise_30d", mdb.engine())
-    except Exception as e:
-        print(f"读取max_rise_30d表失败: {e}")
-        return
-    main_board_prefix = ("600", "601", "603", "605", "000", "001", "002", "003")
-    df = df[df["code"].astype(str).str.zfill(6).str.startswith(main_board_prefix)]
-    abnormal = df[df["max_rise_30d"] > 2]
-    today = datetime.now().strftime("%Y-%m-%d")
-    if not abnormal.empty:
-        for _, row in abnormal.iterrows():
-            print(f"[30日] 股票代码: {row['code']} | 名称: {row['name']} | 30日最大涨幅: {row['max_rise_30d']:.2%} | 最高价日: {row['max_30d_date']} | 最低价日: {row['min_30d_date']} | 当前涨幅: {row['max_rise_30d']:.2%} | {today} 已经严重异动")
-    else:
-        print("无30日涨幅超过200%的主板股票")
-    abnormal_codes = set(abnormal["code"].astype(str).str.zfill(6))
-    for _, row in df.iterrows():
-        code = str(row['code']).zfill(6)
-        if code in abnormal_codes:
-            continue
-        min_30d_date = row['min_30d_date']
-        try:
-            sql = f"SELECT close FROM `{code}` WHERE close IS NOT NULL ORDER BY date DESC LIMIT 1"
-            latest = mdb.executeSqlFetch(sql)
-            if not latest or latest[0][0] is None:
-                continue
-            latest_close = float(latest[0][0])
-            sql = f"SELECT close FROM `{code}` WHERE date = '{min_30d_date}' AND close IS NOT NULL LIMIT 1"
-            min_30d = mdb.executeSqlFetch(sql)
-            if not min_30d or min_30d[0][0] is None:
-                continue
-            min_30d_close = float(min_30d[0][0])
-            # 判断 (今日收盘价 * 1.1 / 30日最低价) > 3 （200%是今日收盘价是30日最低价的3倍）
-            if min_30d_close > 0 and (latest_close * 1.1 / min_30d_close) > 3:
-                zf2 = (min_30d_close * 2 - latest_close) / latest_close
-                print(f"[30日] 股票代码: {row['code']} | 名称: {row['name']} | 最新收盘价: {latest_close} | 30日前最低价: {min_30d_close} | 30日前最低价日: {min_30d_date} | 当前涨幅: {(latest_close / min_30d_close - 1):.2%} | 明天涨幅{zf2:.2%}，将严重异动")
-        except Exception as e:
-            print(f"处理股票{code}时异常: {e}")
-
-def detect_gem_and_star_board_abnormal_30d():
-    """
-    检测创业板+科创板30日异动：
-    1. 30日涨幅超过200%的创业板/科创板股票
-    2. (今日收盘价 * 1.2 / 30日最低价) > 2 的创业板/科创板股票（排除已在abnormal中的票），并给出明天涨2%到2倍的提示。
-    """
-    try:
-        df = pd.read_sql("SELECT * FROM max_rise_30d", mdb.engine())
-    except Exception as e:
-        print(f"读取max_rise_30d表失败: {e}")
-        return
-    gem_star_prefix = ("300", "301", "688")
-    df = df[df["code"].astype(str).str.zfill(6).str.startswith(gem_star_prefix)]
-    abnormal = df[df["max_rise_30d"] > 2]
-    today = datetime.now().strftime("%Y-%m-%d")
-    if not abnormal.empty:
-        for _, row in abnormal.iterrows():
-            print(f"[创业/科创-30日] 股票代码: {row['code']} | 名称: {row['name']} | 30日最大涨幅: {row['max_rise_30d']:.2%} | 最高价日: {row['max_30d_date']} | 最低价日: {row['min_30d_date']} | 当前涨幅: {row['max_rise_30d']:.2%} | {today} 已经严重异动")
-    else:
-        print("无30日涨幅超过200%的创业/科创板股票")
-    abnormal_codes = set(abnormal["code"].astype(str).str.zfill(6))
-    for _, row in df.iterrows():
-        code = str(row['code']).zfill(6)
-        if code in abnormal_codes:
-            continue
-        min_30d_date = row['min_30d_date']
-        try:
-            sql = f"SELECT close FROM `{code}` WHERE close IS NOT NULL ORDER BY date DESC LIMIT 1"
-            latest = mdb.executeSqlFetch(sql)
-            if not latest or latest[0][0] is None:
-                continue
-            latest_close = float(latest[0][0])
-            sql = f"SELECT close FROM `{code}` WHERE date = '{min_30d_date}' AND close IS NOT NULL LIMIT 1"
-            min_30d = mdb.executeSqlFetch(sql)
-            if not min_30d or min_30d[0][0] is None:
-                continue
-            min_30d_close = float(min_30d[0][0])
-            if min_30d_close > 0 and (latest_close * 1.2 / min_30d_close) > 3:
-                zf2 = (min_30d_close * 2 - latest_close) / latest_close
-                print(f"[创业/科创-30日] 股票代码: {row['code']} | 名称: {row['name']} | 最新收盘价: {latest_close} | 30日前最低价: {min_30d_close} | 30日前最低价日: {min_30d_date} | 当前涨幅: {(latest_close / min_30d_close - 1):.2%} | 明日涨幅{zf2:.2%}，将严重异动")
+            min_close = float(min_close[0][0])
+            if min_close > 0 and (latest_close * extra_ratio / min_close) > extra_threshold:
+                zf2 = (min_close * 2 - latest_close) / latest_close
+                print(f"[{board_name}-{period}日] 股票代码: {row['code']} | 名称: {row['name']} | 最新收盘价: {latest_close} | {period}日前最低价: {min_close} | {period}日前最低价日: {min_date} | 当前涨幅: {(latest_close / min_close - 1):.2%} | 明日涨{zf2:.2%}将严重异动")
         except Exception as e:
             print(f"处理股票{code}时异常: {e}")
 
@@ -388,138 +270,80 @@ def export_abnormal_tables():
     整理输出10日异动榜和30日异动榜，包含：code，名称，最大涨幅，最低价日，最高价日，备注。
     """
     import pandas as pd
-    # 10日异动榜
-    try:
-        df10 = pd.read_sql("SELECT * FROM max_rise_10d", mdb.engine())
-    except Exception as e:
-        print(f"读取max_rise_10d表失败: {e}")
-        return
-    # 只保留最高价日>最低价日的记录
-    df10 = df10[df10["max_10d_date"] > df10["min_10d_date"]].copy()
-    abnormal_10 = df10[df10["max_rise_10d"] > 1].copy()
-    abnormal_10["备注"] = "已严重异动"
-    # 检查zf2相关股票（主板、创业板、科创板）
-    zf2_rows_10 = []
-    for _, row in df10.iterrows():
-        code = str(row['code']).zfill(6)
-        if code in set(abnormal_10["code"].astype(str).str.zfill(6)):
-            continue
-        min_10d_date = row['min_10d_date']
-        max_10d_date = row['max_10d_date']
-        # 只考虑最高价日在最低价日之后的
-        if max_10d_date <= min_10d_date:
-            continue
+    from datetime import datetime
+    results = []
+    for period in [10, 30]:
+        table = f"max_rise_{period}d"
+        rise_threshold = 1 if period == 10 else 2
+        # 读取表
         try:
-            sql = f"SELECT close FROM `{code}` WHERE close IS NOT NULL ORDER BY date DESC LIMIT 1"
-            latest = mdb.executeSqlFetch(sql)
-            if not latest or latest[0][0] is None:
-                continue
-            latest_close = float(latest[0][0])
-            sql = f"SELECT close FROM `{code}` WHERE date = '{min_10d_date}' AND close IS NOT NULL LIMIT 1"
-            min_10d = mdb.executeSqlFetch(sql)
-            if not min_10d or min_10d[0][0] is None:
-                continue
-            min_10d_close = float(min_10d[0][0])
-            is_main = code.startswith(("600", "601", "603", "605", "000", "001", "002", "003"))
-            is_gem_star = code.startswith(("300", "301", "688"))
-            if is_main and min_10d_close > 0 and (latest_close * 1.1 / min_10d_close) > 2:
-                zf2 = (min_10d_close * 2 - latest_close) / latest_close
-                zf2_rows_10.append({
-                    "code": code,
-                    "name": row["name"],
-                    "最大涨幅": latest_close / min_10d_close - 1,
-                    "最低价日": min_10d_date,
-                    "最高价日": max_10d_date,
-                    "备注": f"明日涨{zf2:.2%}将严重异动"
-                })
-            elif is_gem_star and min_10d_close > 0 and (latest_close * 1.2 / min_10d_close) > 2:
-                zf2 = (min_10d_close * 2 - latest_close) / latest_close
-                zf2_rows_10.append({
-                    "code": code,
-                    "name": row["name"],
-                    "最大涨幅": latest_close / min_10d_close - 1,
-                    "最低价日": min_10d_date,
-                    "最高价日": max_10d_date,
-                    "备注": f"明日涨{zf2:.2%}将严重异动"
-                })
+            df = pd.read_sql(f"SELECT * FROM {table}", mdb.engine())
         except Exception as e:
+            print(f"读取{table}表失败: {e}")
+            results.append(pd.DataFrame(columns=["code", "name", "最大涨幅", "最低价日", "最高价日", "备注"]))
             continue
-    out10 = abnormal_10[["code", "name", "max_rise_10d", "min_10d_date", "max_10d_date", "备注"]].copy()
-    out10 = out10.rename(columns={"max_rise_10d": "最大涨幅", "min_10d_date": "最低价日", "max_10d_date": "最高价日"})
-    if zf2_rows_10:
-        out10 = pd.concat([out10, pd.DataFrame(zf2_rows_10)], ignore_index=True)
-    # 格式化最大涨幅为百分比字符串
-    out10["最大涨幅"] = out10["最大涨幅"].apply(lambda x: f"{x:.2%}" if pd.notnull(x) else "")
-
-    # 30日异动榜
-    try:
-        df30 = pd.read_sql("SELECT * FROM max_rise_30d", mdb.engine())
-    except Exception as e:
-        print(f"读取max_rise_30d表失败: {e}")
-        return
-    df30 = df30[df30["max_30d_date"] > df30["min_30d_date"]].copy()
-    abnormal_30 = df30[df30["max_rise_30d"] > 2].copy()
-    abnormal_30["备注"] = "已严重异动"
-    zf2_rows_30 = []
-    for _, row in df30.iterrows():
-        code = str(row['code']).zfill(6)
-        if code in set(abnormal_30["code"].astype(str).str.zfill(6)):
-            continue
-        min_30d_date = row['min_30d_date']
-        max_30d_date = row['max_30d_date']
-        if max_30d_date <= min_30d_date:
-            continue
-        try:
-            sql = f"SELECT close FROM `{code}` WHERE close IS NOT NULL ORDER BY date DESC LIMIT 1"
-            latest = mdb.executeSqlFetch(sql)
-            if not latest or latest[0][0] is None:
+        # 只保留最高价日>最低价日的记录
+        max_col = f"max_{period}d_date"
+        min_col = f"min_{period}d_date"
+        rise_col = f"max_rise_{period}d"
+        df = df[df[max_col] > df[min_col]].copy()
+        # 异动榜
+        abnormal = df[df[rise_col] > rise_threshold].copy()
+        abnormal["备注"] = "已严重异动"
+        # zf2相关股票
+        zf2_rows = []
+        for _, row in df.iterrows():
+            code = str(row['code']).zfill(6)
+            if code in set(abnormal["code"].astype(str).str.zfill(6)):
                 continue
-            latest_close = float(latest[0][0])
-            sql = f"SELECT close FROM `{code}` WHERE date = '{min_30d_date}' AND close IS NOT NULL LIMIT 1"
-            min_30d = mdb.executeSqlFetch(sql)
-            if not min_30d or min_30d[0][0] is None:
+            min_date = row[min_col]
+            max_date = row[max_col]
+            if max_date <= min_date:
                 continue
-            min_30d_close = float(min_30d[0][0])
-            is_main = code.startswith(("600", "601", "603", "605", "000", "001", "002", "003"))
-            is_gem_star = code.startswith(("300", "301", "688"))
-            if is_main and min_30d_close > 0 and (latest_close * 1.1 / min_30d_close) > 3:
-                zf2 = (min_30d_close * 2 - latest_close) / latest_close
-                zf2_rows_30.append({
-                    "code": code,
-                    "name": row["name"],
-                    "最大涨幅": latest_close / min_30d_close - 1,
-                    "最低价日": min_30d_date,
-                    "最高价日": max_30d_date,
-                    "备注": f"明日涨{zf2:.2%}将严重异动"
-                })
-            elif is_gem_star and min_30d_close > 0 and (latest_close * 1.2 / min_30d_close) > 3:
-                zf2 = (min_30d_close * 2 - latest_close) / latest_close
-                zf2_rows_30.append({
-                    "code": code,
-                    "name": row["name"],
-                    "最大涨幅": latest_close / min_30d_close - 1,
-                    "最低价日": min_30d_date,
-                    "最高价日": max_30d_date,
-                    "备注": f"明日涨{zf2:.2%}将严重异动"
-                })
-        except Exception as e:
-            continue
-    out30 = abnormal_30[["code", "name", "max_rise_30d", "min_30d_date", "max_30d_date", "备注"]].copy()
-    out30 = out30.rename(columns={"max_rise_30d": "最大涨幅", "min_30d_date": "最低价日", "max_30d_date": "最高价日"})
-    if zf2_rows_30:
-        out30 = pd.concat([out30, pd.DataFrame(zf2_rows_30)], ignore_index=True)
-    out30["最大涨幅"] = out30["最大涨幅"].apply(lambda x: f"{x:.2%}" if pd.notnull(x) else "")
+            try:
+                sql = f"SELECT close FROM `{code}` WHERE close IS NOT NULL ORDER BY date DESC LIMIT 1"
+                latest = mdb.executeSqlFetch(sql)
+                if not latest or latest[0][0] is None:
+                    continue
+                latest_close = float(latest[0][0])
+                sql = f"SELECT close FROM `{code}` WHERE date = '{min_date}' AND close IS NOT NULL LIMIT 1"
+                min_close = mdb.executeSqlFetch(sql)
+                if not min_close or min_close[0][0] is None:
+                    continue
+                min_close = float(min_close[0][0])
+                # 主板和创业/科创板参数
+                is_main = code.startswith(("600", "601", "603", "605", "000", "001", "002", "003"))
+                is_gem_star = code.startswith(("300", "301", "688"))
+                extra_ratio = 1.1 if is_main else 1.2
+                extra_threshold = 2 if period == 10 else 3
+                if min_close > 0 and (latest_close * extra_ratio / min_close) > extra_threshold:
+                    zf2 = (min_close * 2 - latest_close) / latest_close
+                    zf2_rows.append({
+                        "code": code,
+                        "name": row["name"],
+                        "最大涨幅": latest_close / min_close - 1,
+                        "最低价日": min_date,
+                        "最高价日": max_date,
+                        "备注": f"明日涨{zf2:.2%}将严重异动"
+                    })
+            except Exception as e:
+                continue
+        out = abnormal[["code", "name", rise_col, min_col, max_col, "备注"]].copy()
+        out = out.rename(columns={rise_col: "最大涨幅", min_col: "最低价日", max_col: "最高价日"})
+        if zf2_rows:
+            out = pd.concat([out, pd.DataFrame(zf2_rows)], ignore_index=True)
+        out["最大涨幅"] = out["最大涨幅"].apply(lambda x: f"{x:.2%}" if pd.notnull(x) else "")
+        results.append(out)
     # 输出到同一张图（上下排，备注列加宽）
+    out10, out30 = results
     nrows = 2
     ncols = 1
     row_num_10 = len(out10)
     row_num_30 = len(out30)
     col_num_10 = len(out10.columns)
     col_num_30 = len(out30.columns)
-    # 备注列宽度加大
     base_col_width = 1.2
-    remark_col_width = 4.5  # 备注列宽度
-    # 计算宽度：普通列*数量+备注列
+    remark_col_width = 4.5
     fig_width_10 = base_col_width * (col_num_10 - 1) + remark_col_width
     fig_width_30 = base_col_width * (col_num_30 - 1) + remark_col_width
     fig_width = max(10, fig_width_10, fig_width_30)
@@ -527,7 +351,6 @@ def export_abnormal_tables():
     fig, axes = plt.subplots(nrows, ncols, figsize=(fig_width, fig_height))
     fig.suptitle(f'{datetime.now().date()}异动情况', fontsize=18)
     axes = axes if isinstance(axes, (list, np.ndarray)) else [axes]
-
     # 10日榜
     axes[0].axis('off')
     tbl10 = axes[0].table(cellText=out10.values, colLabels=out10.columns, loc='center', cellLoc='center')
@@ -535,13 +358,11 @@ def export_abnormal_tables():
     tbl10.set_fontsize(12)
     tbl10.scale(1.2, 1.2)
     axes[0].set_title('10日异动榜', fontsize=14)
-    # 调整备注列宽
     for key, cell in tbl10.get_celld().items():
         if key[1] == out10.columns.get_loc("备注"):
             cell.set_width(remark_col_width / fig_width)
         else:
             cell.set_width(base_col_width / fig_width)
-
     # 30日榜
     axes[1].axis('off')
     tbl30 = axes[1].table(cellText=out30.values, colLabels=out30.columns, loc='center', cellLoc='center')
@@ -554,7 +375,6 @@ def export_abnormal_tables():
             cell.set_width(remark_col_width / fig_width)
         else:
             cell.set_width(base_col_width / fig_width)
-
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     plt.savefig('abnormal_both.png', dpi=200, bbox_inches='tight')
     plt.close(fig)
@@ -567,8 +387,8 @@ if __name__ == "__main__":
     #     create_baostock_code_map_table()
     # read_baostock_code_map_table()
     # calc_max_rise_for_all_stocks()
-    detect_main_board_abnormal()
-    detect_gem_and_star_board_abnormal()
-    detect_main_board_abnormal_30d()
-    detect_gem_and_star_board_abnormal_30d()
+    detect_abnormal(period=10, board_type='main')
+    detect_abnormal(period=10, board_type='gem_star')
+    detect_abnormal(period=30, board_type='main')
+    detect_abnormal(period=30, board_type='gem_star')
     export_abnormal_tables()
