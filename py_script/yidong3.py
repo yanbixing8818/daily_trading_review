@@ -1,19 +1,18 @@
 import baostock as bs
 import pandas as pd
+import numpy as np
 import core.tablestructure as tbs
 import core.crawling.stock_hist_em as she
 import core.database as mdb
 from datetime import datetime
-import logging
 import core.trade_time as trade_time
-import csv
+import matplotlib.pyplot as plt
+from matplotlib.table import Table
+from core.utils import get_recent_trade_range
 import matplotlib
 matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
 matplotlib.rcParams['axes.unicode_minus'] = False
-import matplotlib.pyplot as plt
-from matplotlib.table import Table
-import numpy as np
-from core.utils import get_recent_trade_range
+
 
 # 覆写数据库名和相关连接参数
 mdb.db_database = "stock_hist"  # 替换为你想用的数据库名
@@ -198,36 +197,30 @@ def detect_abnormal(period=10, board_type='main', return_df=False):
     return None
 
 
+def sort_abnormal_df(df):
+    """将已严重异动的股票排在前面"""
+    df['备注'] = df['备注'].astype(str)
+    return df.sort_values(by='备注', key=lambda x: x != '已严重异动').reset_index(drop=True)
+
 def export_abnormal_tables():
     """
-    整理输出10日异动榜和30日异动榜，包含：code，名称，最大涨幅，最低价日，最高价日，备注。
-    10日榜为主板和创业/科创板合并，30日榜为主板和创业/科创板合并。
+    输出10日和30日异动榜（主板+创业/科创板合并），包含：code，名称，最大涨幅，最低价日，最高价日，备注。
     """
     # 获取并合并10日榜
     out10_main = detect_abnormal(period=10, board_type='main', return_df=True)
     out10_gem = detect_abnormal(period=10, board_type='gem_star', return_df=True)
     out10 = pd.concat([out10_main, out10_gem], ignore_index=True)
+    out10 = sort_abnormal_df(out10)
     # 获取并合并30日榜
     out30_main = detect_abnormal(period=30, board_type='main', return_df=True)
     out30_gem = detect_abnormal(period=30, board_type='gem_star', return_df=True)
     out30 = pd.concat([out30_main, out30_gem], ignore_index=True)
-    # 排序：已严重异动在前
-    out10['备注'] = out10['备注'].astype(str)
-    out10 = out10.sort_values(by='备注', key=lambda x: x != '已严重异动').reset_index(drop=True)
-    out30['备注'] = out30['备注'].astype(str)
-    out30 = out30.sort_values(by='备注', key=lambda x: x != '已严重异动').reset_index(drop=True)
-    nrows = 2
-    ncols = 1
-    row_num_10 = len(out10)
-    row_num_30 = len(out30)
-    col_num_10 = len(out10.columns)
-    col_num_30 = len(out30.columns)
-    base_col_width = 1.2
-    remark_col_width = 4.5
-    fig_width_10 = base_col_width * (col_num_10 - 1) + remark_col_width
-    fig_width_30 = base_col_width * (col_num_30 - 1) + remark_col_width
-    fig_width = max(10, fig_width_10, fig_width_30)
-    fig_height = max(6, row_num_10 * 0.5 + row_num_30 * 0.5 + 3)
+    out30 = sort_abnormal_df(out30)
+    # 画图部分
+    nrows, ncols = 2, 1
+    base_col_width, remark_col_width = 1.2, 4.5
+    fig_width = max(10, base_col_width * (len(out10.columns) - 1) + remark_col_width, base_col_width * (len(out30.columns) - 1) + remark_col_width)
+    fig_height = max(6, len(out10) * 0.5 + len(out30) * 0.5 + 3)
     fig, axes = plt.subplots(nrows, ncols, figsize=(fig_width, fig_height))
     fig.suptitle(f'{datetime.now().date()}异动情况', fontsize=18)
     axes = axes.flatten() if hasattr(axes, 'flatten') else [axes]
@@ -256,9 +249,10 @@ def export_abnormal_tables():
         else:
             cell.set_width(base_col_width / fig_width)
     plt.tight_layout(rect=[0, 0, 1, 0.96])
-    plt.savefig(f'{datetime.now().date()}abnormal.png', dpi=200, bbox_inches='tight')
+    img_name = f'{datetime.now().date()}_abnormal.png'
+    plt.savefig(img_name, dpi=200, bbox_inches='tight')
     plt.close(fig)
-    print(f"已保存{datetime.now().date()}10日+30日异动榜图片 abnormal.png")
+    print(f'已保存{img_name}')
     return out10, out30
 
 if __name__ == "__main__":
@@ -267,8 +261,8 @@ if __name__ == "__main__":
     #     create_baostock_code_map_table()
     # read_baostock_code_map_table()
     date = datetime(2025, 6, 10).date()
-    # calc_max_rise_from_date_to_N_day_before(date, 10)
-    # calc_max_rise_from_date_to_N_day_before(date, 30)
+    calc_max_rise_from_date_to_N_day_before(date, 10)
+    calc_max_rise_from_date_to_N_day_before(date, 30)
     # detect_abnormal(period=10, board_type='main')
     # detect_abnormal(period=10, board_type='gem_star')
     # detect_abnormal(period=30, board_type='main')
