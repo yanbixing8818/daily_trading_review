@@ -13,6 +13,7 @@ matplotlib.rcParams['axes.unicode_minus'] = False
 import matplotlib.pyplot as plt
 from matplotlib.table import Table
 import numpy as np
+from core.utils import get_recent_trade_range
 
 # 覆写数据库名和相关连接参数
 mdb.db_database = "stock_hist"  # 替换为你想用的数据库名
@@ -20,120 +21,17 @@ mdb.MYSQL_CONN_URL = "mysql+pymysql://%s:%s@%s:%s/%s?charset=%s" % (
     mdb.db_user, mdb.db_password, mdb.db_host, mdb.db_port, mdb.db_database, mdb.db_charset)
 mdb.MYSQL_CONN_DBAPI['database'] = mdb.db_database
 
-def get_history_k_data(baostock_code, start_date, end_date):
-    # 登陆系统
-    lg = bs.login()
-    # 显示登陆返回信息
-    print(lg.error_code)
-    print(lg.error_msg)
-    # 查询历史K线数据
-    rs = bs.query_history_k_data_plus(
-        baostock_code,
-        "date,code,open,high,low,close,volume,amount,adjustflag",
-        start_date=start_date, end_date=end_date,
-        frequency="d", adjustflag="3")
-    print(rs.error_code)
-    print(rs.error_msg)
-    # 获取具体的信息
-    result_list = []
-    while (rs.error_code == '0') & rs.next():
-        result_list.append(rs.get_row_data())
-    result = pd.DataFrame(result_list, columns=rs.fields)
-    print(f"{baostock_code} 近30日历史数据:")
-    print(result)
-    # 登出系统
-    bs.logout()
-    return result
 
-def add_prefix(code):
-    code = str(code)
-    if code.startswith(('6', '9')):
-        return 'sh.' + code
-    elif code.startswith(('0', '3', '2')):
-        return 'sz.' + code
-    else:
-        return code  # 若无法识别则原样返回
 
-def create_baostock_code_map_table():
-    try:
-        # #获取所有A股股票数据
-        # df = she.stock_zh_a_spot_em()
-        # if df is None or len(df.index) == 0:
-        #     print("未从东方财富获取到A股股票数据")
-        #     df = pd.read_csv('./all_a_stock_spot.csv')
-        # print(df)
-
-        df = pd.read_csv('./data/all_a_stock_spot.csv')
-
-        print(df.columns)
-        df.rename(columns={'代码': 'code', '名称': 'name'}, inplace=True)
-        df['code'] = df['code'].astype(str).str.zfill(6)
-        df['baostock_mapped_code'] = df['code'].apply(add_prefix)
-        # 只保留name, code, baostock_mapped_code三列
-        df = df[['name', 'code', 'baostock_mapped_code']]
-        table_name = tbs.TABLE_CN_BAOSTOCK_CODE_MAP['name']
-        cols_type = tbs.get_field_types(tbs.TABLE_CN_BAOSTOCK_CODE_MAP['columns'])
-        # 先清空表
-        if mdb.checkTableIsExist(table_name):
-            mdb.executeSql(f"DELETE FROM `{table_name}`")
-        # 插入数据
-        mdb.insert_db_from_df(df, table_name, cols_type, False, "`code`")
-        print(f"{table_name}表已创建并写入{len(df)}条数据")
-    except Exception as e:
-        logging.error(f"create_baostock_code_map_table处理异常：{e}")
-
-def get_recent_trade_range(n=30):
+def calc_max_rise(date, N=30):
     """
-    获取最近n个交易日区间，返回(start_date_str, end_date_str)
-    start_date为今天（如非交易日则为最近一个交易日），end_date为start_date往前推n个交易日。
+    读取所有表名，读取每个表内从start_date_str到end_date_str区间内的数据，
+    计算最大涨幅（最高价日>最低价日），保存到新生成的表max_rise_custom。
+    同时保存最高价日和最低价日对应的收盘价。
     """
-    today = datetime.now().date()
-    if not trade_time.is_trade_date(today):
-        start_date = trade_time.get_previous_trade_date(today)
-    else:
-        start_date = today
-    trade_dates = list(sorted(trade_time.stock_trade_date().get_data()))
-    start_idx = trade_dates.index(start_date)
-    if start_idx < n:
-        end_date = trade_dates[0]
-    else:
-        end_date = trade_dates[start_idx - n]
-    start_date_str = start_date.strftime('%Y-%m-%d')
-    end_date_str = end_date.strftime('%Y-%m-%d')
-    return start_date_str, end_date_str
+    start_date_str, end_date_str = get_recent_trade_range(date, N)
+    print(f"计算{N}日最大涨幅，区间为（{start_date_str}, {end_date_str}]")
 
-def read_baostock_code_map_table():
-    try:
-        table_name = tbs.TABLE_CN_BAOSTOCK_CODE_MAP['name']
-        sql = f"SELECT name, code, baostock_mapped_code FROM `{table_name}`"
-        rows = mdb.executeSqlFetch(sql)
-        if rows:
-            print(f"{table_name}表内容：")
-            start_date_str, end_date_str = get_recent_trade_range(30)
-            for row in rows:
-                name, code, baostock_mapped_code = row
-                print(row)
-                # 获取30日历史数据
-                hist_df = get_history_k_data(baostock_mapped_code, end_date_str, start_date_str)
-                if hist_df is not None and not hist_df.empty:
-                    # 以股票代码为表名保存
-                    hist_table_name = code  # 直接用原始code作为表名
-                    # 字段类型自动推断
-                    try:
-                        mdb.insert_db_from_df(hist_df, hist_table_name, None, False, "`date`")
-                        print(f"历史数据已保存到表 {hist_table_name}")
-                    except Exception as e:
-                        logging.error(f"保存历史数据到表 {hist_table_name} 失败: {e}")
-        else:
-            print(f"{table_name}表无数据。")
-    except Exception as e:
-        logging.error(f"read_baostock_code_map_table处理异常：{e}")
-
-def calc_max_rise_for_all_stocks():
-    """
-    遍历所有股票历史表，只查一次最近30日数据，同时计算每个股票的30日、10日最大涨幅（最高价日必须在最低价日之后）。
-    结果分别按30日和10日最大涨幅排序，保存到数据库表。
-    """
     # 获取所有表名
     sql = f"SELECT table_name FROM information_schema.tables WHERE table_schema='{mdb.db_database}'"
     tables = mdb.executeSqlFetch(sql)
@@ -146,14 +44,13 @@ def calc_max_rise_for_all_stocks():
     map_rows = mdb.executeSqlFetch(f"SELECT code, name FROM `{map_table}`")
     if map_rows:
         code_map = {str(code): name for code, name in map_rows}
-    results_30 = []
-    results_10 = []
+    results = []
     for (table_name,) in tables:
         # 只处理6位数字的表名
         if not (isinstance(table_name, str) and len(table_name) == 6 and table_name.isdigit()):
             continue
-        # 读取表数据，按日期升序排列
-        sql = f"SELECT date, close FROM `{table_name}` WHERE close IS NOT NULL ORDER BY date ASC LIMIT 30"
+        # 读取表数据，取区间（start_date_str, end_date_str]，按日期升序排列
+        sql = f"SELECT date, close FROM `{table_name}` WHERE close IS NOT NULL AND date > '{start_date_str}' AND date <= '{end_date_str}' ORDER BY date ASC"
         rows = mdb.executeSqlFetch(sql)
         if not rows or len(rows) < 2:
             continue
@@ -162,41 +59,32 @@ def calc_max_rise_for_all_stocks():
         df = df.dropna(subset=["close"]).reset_index(drop=True)
         if len(df) < 2:
             continue
-        # 计算30日最大涨幅（最高价日>最低价日）
-        def max_rise_window(df, window):
-            max_rise = -float('inf')
-            min_date = max_date = None
-            min_val = max_val = None
-            for i in range(len(df) - window + 1):
-                w = df.iloc[i:i+window]
-                for j in range(len(w)):
-                    for k in range(j+1, len(w)):
-                        if w.iloc[k]['close'] > 0 and w.iloc[j]['close'] > 0:
-                            rise = w.iloc[k]['close'] / w.iloc[j]['close'] - 1
-                            if rise > max_rise:
-                                max_rise = rise
-                                min_val = w.iloc[j]['close']
-                                max_val = w.iloc[k]['close']
-                                min_date = w.iloc[j]['date']
-                                max_date = w.iloc[k]['date']
-            return max_rise if max_rise != -float('inf') else None, min_date, max_date
-        # 30日
-        rise_30, min_30_date, max_30_date = max_rise_window(df, 30)
-        # 10日
-        rise_10, min_10_date, max_10_date = max_rise_window(df, 10)
+        # 计算最大涨幅（最高价日>最低价日）
+        max_rise = -float('inf')
+        min_date = max_date = None
+        min_close = max_close = None
+        for i in range(len(df)):
+            for j in range(i+1, len(df)):
+                if df.iloc[j]['close'] > 0 and df.iloc[i]['close'] > 0:
+                    rise = df.iloc[j]['close'] / df.iloc[i]['close'] - 1
+                    if rise > max_rise:
+                        max_rise = rise
+                        min_date = df.iloc[i]['date']
+                        max_date = df.iloc[j]['date']
+                        min_close = df.iloc[i]['close']
+                        max_close = df.iloc[j]['close']
+        max_rise = max_rise if max_rise != -float('inf') else None
         stock_name = code_map.get(table_name, "")
-        results_30.append((table_name, stock_name, rise_30, max_30_date, min_30_date))
-        results_10.append((table_name, stock_name, rise_10, max_10_date, min_10_date))
-    # 保存到SQL表
-    df_30 = pd.DataFrame(results_30, columns=["code", "name", "max_rise_30d", "max_30d_date", "min_30d_date"])
-    df_10 = pd.DataFrame(results_10, columns=["code", "name", "max_rise_10d", "max_10d_date", "min_10d_date"])
-    df_30["code"] = df_30["code"].astype(str).str.zfill(6)
-    df_10["code"] = df_10["code"].astype(str).str.zfill(6)
-    mdb.executeSql(f"DROP TABLE IF EXISTS max_rise_30d")
-    mdb.executeSql(f"DROP TABLE IF EXISTS max_rise_10d")
-    df_30.to_sql("max_rise_30d", mdb.engine(), if_exists="replace", index=False)
-    df_10.to_sql("max_rise_10d", mdb.engine(), if_exists="replace", index=False)
-    print("已保存到数据库表 max_rise_30d 和 max_rise_10d")
+        results.append((table_name, stock_name, max_rise, min_date, min_close, max_date, max_close))
+    # 保存到新表
+    print("[DEBUG] 写入前有效股票数量:", len(results))
+    print("[DEBUG] 有效最大涨幅样例:", [r[2] for r in results if r[2] is not None][:10])
+    df_out = pd.DataFrame(results, columns=[f"code", "name", f"max_rise_{N}d", f"min_{N}d_date", f"min_{N}d_close", f"max_{N}d_date", f"max_{N}d_close"])
+    df_out["code"] = df_out["code"].astype(str).str.zfill(6)
+    mdb.executeSql(f"DROP TABLE IF EXISTS max_rise_{N}d")
+    df_out.to_sql(f"max_rise_{N}d", mdb.engine(), if_exists="replace", index=False)
+    print(f"已保存到数据库表 max_rise_{N}d")
+
 
 def detect_abnormal(period=10, board_type='main'):
     """
@@ -230,10 +118,19 @@ def detect_abnormal(period=10, board_type='main'):
     df = df[df["code"].astype(str).str.zfill(6).str.startswith(prefix)]
     # 只保留最高价日>最低价日的记录
     max_col = f"max_{period}d_date"
+    max_close_col = f"max_{period}d_close"
     min_col = f"min_{period}d_date"
+    min_close_col = f"min_{period}d_close"
     rise_col = f"max_rise_{period}d"
     df = df[df[max_col] > df[min_col]].copy()
+    # 调试：显示涨幅列的最大/最小值、类型、前10大涨幅股票
+    print(f"[DEBUG] {table} {board_name} {period}d 涨幅列类型: {df[rise_col].dtype}")
+    print(f"[DEBUG] {table} {board_name} {period}d 涨幅最大值: {df[rise_col].max()}")
+    print(f"[DEBUG] {table} {board_name} {period}d 涨幅最小值: {df[rise_col].min()}")
+    print(f"[DEBUG] {table} {board_name} {period}d 前10大涨幅:")
+    print(df[["code", "name", rise_col, min_col, min_close_col, max_col, max_close_col]].sort_values(rise_col, ascending=False).head(10))
     # 1. 最大涨幅超过阈值
+    df[rise_col] = pd.to_numeric(df[rise_col], errors='coerce')
     abnormal = df[df[rise_col] > rise_threshold]
     today = datetime.now().strftime("%Y-%m-%d")
     if not abnormal.empty:
@@ -386,9 +283,12 @@ if __name__ == "__main__":
     # if not mdb.checkTableIsExist(table_name):
     #     create_baostock_code_map_table()
     # read_baostock_code_map_table()
-    # calc_max_rise_for_all_stocks()
-    detect_abnormal(period=10, board_type='main')
-    detect_abnormal(period=10, board_type='gem_star')
-    detect_abnormal(period=30, board_type='main')
+    date = datetime(2025, 6, 10).date()
+    # calc_max_rise(date, 10)
+    # calc_max_rise(date, 30)
+    # calc_max_rise_for_all_stocks(date, 30)
+    # detect_abnormal(period=10, board_type='main')
+    # detect_abnormal(period=10, board_type='gem_star')
+    # detect_abnormal(period=30, board_type='main')
     detect_abnormal(period=30, board_type='gem_star')
-    export_abnormal_tables()
+    # export_abnormal_tables()
