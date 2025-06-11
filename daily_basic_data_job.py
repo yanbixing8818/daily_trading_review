@@ -1,17 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import datetime
-import core.stockfetch as stf
+from datetime import datetime
+from core.stockfetch import save_nph_etf_spot_data
+from core.stockfetch import save_nph_stock_spot_data
 from core.utils import schedule_trade_day_jobs
-from core.stockfetch import fetch_stocks_trade_date
+from core.utils import get_recent_trade_range
+from core.crawling.stock_hist_baostock import get_all_hist_k_data_and_save
 
 def job():
-    now = datetime.datetime.now()
-    stf.save_nph_stock_spot_data(now)
-    stf.save_nph_etf_spot_data(now)
+    today = datetime.now().date()
+    
+    #从东财抓取股票和基金的实时行情数据
+    save_nph_stock_spot_data(today)
+    save_nph_etf_spot_data(today)
+    
+    #从baostock抓取股票今天的历史数据
+    start_date_str, end_date_str = get_recent_trade_range(today, 1)
+    print(start_date_str, end_date_str)
+    get_all_hist_k_data_and_save(start_date_str, end_date_str)
+
+    #更新股票的rps
 
 
 if __name__ == '__main__':
-    schedule_trade_day_jobs(job, [(15, 30)])
+    schedule_trade_day_jobs(job, [(18, 00)])
+    # job()
 
