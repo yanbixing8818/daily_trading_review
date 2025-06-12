@@ -12,6 +12,7 @@ mdb.MYSQL_CONN_URL = "mysql+pymysql://%s:%s@%s:%s/%s?charset=%s" % (
 mdb.MYSQL_CONN_DBAPI['database'] = mdb.db_database
 
 
+# 计算N日RPS，该函数需要传入date和N，返回date前N个交易日的RPS数据，并保存到rps_N表中。
 def RPS(date,N=10):
     """
     计算每个股票今天收盘价相对于N个交易日前收盘价的涨幅（RPS），并保存到rps_N表，包含归一化排序字段。
@@ -54,7 +55,7 @@ def RPS(date,N=10):
         # 6. 取区间内第一天（N天前）和最后一天（今天）的收盘价。
         close_N_days_ago = df.iloc[0]["close"]
         close_today = df.iloc[-1]["close"]
-        # 7. 计算RPS（区间涨幅），如果N天前收盘价大于0则计算，否则为None。
+        # 7. 计算区间涨幅，如果N天前收盘价大于0则计算，否则为None。
         if close_N_days_ago > 0:
             rps = close_today / close_N_days_ago - 1
         else:
@@ -70,7 +71,7 @@ def RPS(date,N=10):
     # 归一化排序并保存到数据库
     if not df_n.empty:
         rps_col = f"rps_{N}"
-        # 按rps降序排序，得到排名（1为第一名）
+        # 按涨幅降序排序，得到排名（1为第一名）
         df_n = df_n.sort_values(by=rps_col, ascending=False).reset_index(drop=True)
         df_n[f"rps_{N}_rank_num"] = df_n.index + 1  # 排名，1为第一名
         total = len(df_n)
