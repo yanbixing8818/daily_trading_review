@@ -69,12 +69,14 @@ def RPS(date,N=10):
     
     # 归一化排序并保存到数据库
     if not df_n.empty:
-        rps_col = f"rps_{N}" 
+        rps_col = f"rps_{N}"
+        # 按rps降序排序，得到排名（1为第一名）
         df_n = df_n.sort_values(by=rps_col, ascending=False).reset_index(drop=True)
-        minv = df_n[rps_col].min()
-        maxv = df_n[rps_col].max()
-        if maxv > minv:
-            df_n[f"rps_{N}_rank"] = ((df_n[rps_col] - minv) / (maxv - minv) * 100).round(2)
+        df_n[f"rps_{N}_rank_num"] = df_n.index + 1  # 排名，1为第一名
+        total = len(df_n)
+        # 用排名归一化，第一名100，最后一名0
+        if total > 1:
+            df_n[f"rps_{N}_rank"] = ((total - df_n[f"rps_{N}_rank_num"]) / (total - 1) * 100).round(2)
         else:
             df_n[f"rps_{N}_rank"] = 100.0
     mdb.executeSql(f"DROP TABLE IF EXISTS rps_{N}")
@@ -83,9 +85,9 @@ def RPS(date,N=10):
 
 
 if __name__ == "__main__":
-    date = datetime(2025, 6, 10).date()
-    # RPS(date,5)
-    RPS(date,10)
+    date = datetime(2025, 6, 11).date()
+    RPS(date,5)
+    # RPS(date,10)
     # RPS(date,20)
 
 
