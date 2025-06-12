@@ -8,6 +8,8 @@ from core.utils import schedule_trade_day_jobs
 from core.utils import get_recent_trade_range
 from core.crawling.stock_hist_baostock import get_all_hist_k_data_and_save
 from dingtalk_subjob.calc_abnormal import send_abnormal_to_dingtalk
+from core.rps import RPS
+from dingtalk_subjob.rps_5_top50 import send_rps_5_top50_to_dingtalk
 
 def job():
     today = datetime.now().date()
@@ -25,7 +27,8 @@ def job():
     send_abnormal_to_dingtalk()
 
     #更新股票的rps
-
+    RPS(today, 5)
+    send_rps_5_top50_to_dingtalk()
 
 if __name__ == '__main__':
     schedule_trade_day_jobs(job, [(18, 00)])
