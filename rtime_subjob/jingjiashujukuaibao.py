@@ -13,9 +13,8 @@ SECRET = "SEC0c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8" 
 KEYWORD = "9.28竞价数据快报"  # 钉钉机器人的关键词
 
 def get_auction_data():
-    """获取竞价排名前10的股票数据"""
     try:
-        query = "非ST，竞价涨停"   #改成自己的策略
+        query = "换手率>1%,dde大单净额>100万,竞价金额2000万以上，涨幅大于3%，竞价金额/市值大于0.001，特大单净额+大单净额+中单净额+小单净额大于500万，非st，前10日总涨幅不超过20%"   #改成自己的策略
         df = pywencai.get(query=query, sort_key='竞价涨停封单金额', sort_order='desc')
         return df[['股票代码', '股票简称']].head(10)
     except Exception as e:
@@ -28,8 +27,8 @@ def dingtalk_markdown(content):
     data = {
         "msgtype": "markdown",
         "markdown": {
-            "title": "股票监控提醒",
-            "text": content + "\n\n**关键词：股票监控提醒**"  # 必须包含自定义关键词
+            "title": "9.25竞价选股",
+            "text": content + "\n\n**关键词：9.25竞价选股**"  # 必须包含自定义关键词
         }
     }
     response = requests.post(DINGTALK_WEBHOOK, json=data, headers=headers)
@@ -57,6 +56,7 @@ def jingjiashujukuaibao_rtime_jobs():
 
 if __name__ == "__main__":
     jingjiashujukuaibao_rtime_jobs()
+    # jingjiashujukuaibao()
 
 
 
