@@ -211,45 +211,71 @@ def export_abnormal_tables():
     # 获取并合并10日榜
     out10_main = detect_abnormal(period=10, board_type='main', return_df=True)
     out10_gem = detect_abnormal(period=10, board_type='gem_star', return_df=True)
-    out10 = pd.concat([out10_main, out10_gem], ignore_index=True)
-    out10 = sort_abnormal_df(out10)
+    out10 = pd.concat([out10_main, out10_gem], ignore_index=True) if out10_main is not None and out10_gem is not None else pd.DataFrame()
+    out10 = sort_abnormal_df(out10) if not out10.empty else out10
+
     # 获取并合并30日榜
     out30_main = detect_abnormal(period=30, board_type='main', return_df=True)
     out30_gem = detect_abnormal(period=30, board_type='gem_star', return_df=True)
-    out30 = pd.concat([out30_main, out30_gem], ignore_index=True)
-    out30 = sort_abnormal_df(out30)
+    out30 = pd.concat([out30_main, out30_gem], ignore_index=True) if out30_main is not None and out30_gem is not None else pd.DataFrame()
+    out30 = sort_abnormal_df(out30) if not out30.empty else out30
+
+    # 如果两个表都为空，直接返回
+    if out10.empty and out30.empty:
+        print("没有检测到任何异动股票")
+        send_to_dingtalk(None, f"{datetime.now().date()}异动情况 - 无异常")
+        return out10, out30
+
     # 画图部分
-    nrows, ncols = 2, 1
+    nrows = 2 if not out10.empty and not out30.empty else 1
+    ncols = 1
     base_col_width, remark_col_width = 1.2, 4.5
-    fig_width = max(10, base_col_width * (len(out10.columns) - 1) + remark_col_width, base_col_width * (len(out30.columns) - 1) + remark_col_width)
-    fig_height = max(6, len(out10) * 0.5 + len(out30) * 0.5 + 3)
+    
+    # 确定图表大小
+    fig_width = max(10, base_col_width * (len(out10.columns) - 1) + remark_col_width if not out10.empty else 0,
+                   base_col_width * (len(out30.columns) - 1) + remark_col_width if not out30.empty else 0)
+    fig_height = max(6, (len(out10) * 0.5 if not out10.empty else 0) + 
+                    (len(out30) * 0.5 if not out30.empty else 0) + 3)
+    
     fig, axes = plt.subplots(nrows, ncols, figsize=(fig_width, fig_height))
     fig.suptitle(f'{datetime.now().date()}异动情况', fontsize=18)
     axes = axes.flatten() if hasattr(axes, 'flatten') else [axes]
+
     # 10日榜
-    axes[0].axis('off')
-    tbl10 = axes[0].table(cellText=out10.values, colLabels=out10.columns, loc='center', cellLoc='center')
-    tbl10.auto_set_font_size(False)
-    tbl10.set_fontsize(12)
-    tbl10.scale(1.2, 1.2)
-    axes[0].set_title('10日异动榜', fontsize=14)
-    for key, cell in tbl10.get_celld().items():
-        if key[1] == out10.columns.get_loc("备注"):
-            cell.set_width(remark_col_width / fig_width)
-        else:
-            cell.set_width(base_col_width / fig_width)
+    if not out10.empty:
+        axes[0].axis('off')
+        tbl10 = axes[0].table(cellText=out10.values, colLabels=out10.columns, loc='center', cellLoc='center')
+        tbl10.auto_set_font_size(False)
+        tbl10.set_fontsize(12)
+        tbl10.scale(1.2, 1.2)
+        axes[0].set_title('10日异动榜', fontsize=14)
+        for key, cell in tbl10.get_celld().items():
+            if key[1] == out10.columns.get_loc("备注"):
+                cell.set_width(remark_col_width / fig_width)
+            else:
+                cell.set_width(base_col_width / fig_width)
+    else:
+        axes[0].axis('off')
+        axes[0].text(0.5, 0.5, '10日无异常股票', ha='center', va='center', fontsize=14)
+
     # 30日榜
-    axes[1].axis('off')
-    tbl30 = axes[1].table(cellText=out30.values, colLabels=out30.columns, loc='center', cellLoc='center')
-    tbl30.auto_set_font_size(False)
-    tbl30.set_fontsize(12)
-    tbl30.scale(1.2, 1.2)
-    axes[1].set_title('30日异动榜', fontsize=14)
-    for key, cell in tbl30.get_celld().items():
-        if key[1] == out30.columns.get_loc("备注"):
-            cell.set_width(remark_col_width / fig_width)
-        else:
-            cell.set_width(base_col_width / fig_width)
+    if not out30.empty:
+        idx = 1 if not out10.empty else 0
+        axes[idx].axis('off')
+        tbl30 = axes[idx].table(cellText=out30.values, colLabels=out30.columns, loc='center', cellLoc='center')
+        tbl30.auto_set_font_size(False)
+        tbl30.set_fontsize(12)
+        tbl30.scale(1.2, 1.2)
+        axes[idx].set_title('30日异动榜', fontsize=14)
+        for key, cell in tbl30.get_celld().items():
+            if key[1] == out30.columns.get_loc("备注"):
+                cell.set_width(remark_col_width / fig_width)
+            else:
+                cell.set_width(base_col_width / fig_width)
+    elif not out10.empty:
+        axes[1].axis('off')
+        axes[1].text(0.5, 0.5, '30日无异常股票', ha='center', va='center', fontsize=14)
+
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     buf = io.BytesIO()
     plt.savefig(buf, format='png', dpi=200, bbox_inches='tight')
