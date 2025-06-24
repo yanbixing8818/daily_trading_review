@@ -5,26 +5,29 @@ import requests
 from datetime import datetime, timedelta
 from chinese_calendar import is_workday
 from core.utils import schedule_trade_day_jobs
+import pandas as pd
 
 # 钉钉机器人配置
 DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=0658b0d8ab22e663316d48031e4049fdc20db6d4a15fe4bd23c106ff69ca0103"
 KEYWORD = "新股上市提醒"  # 钉钉机器人的关键词
 
-def get_new_stocks_today():
-    """获取今日上市的新股列表"""
+def get_new_stocks_today(date=None):
+    """获取指定日期（默认为今日）上市的新股列表"""
     try:
-        # 获取今天的日期
-        # today = datetime.now().strftime("%Y-%m-%d")
-        date = datetime(2025, 6, 11).date().strftime("%Y-%m-%d")
-        print(date)
+        # 获取日期
+        if date is None:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+        else:
+            date_str = str(date)
+        # print(date_str)
         
-        # 使用pywencai查询今日上市的新股
-        query = f"{date}上市的股票"
+        # 使用pywencai查询指定日期上市的新股
+        query = f"{date_str}上市的股票"
         print(query)
         df = pywencai.get(query=query, sort_key='上市日期', sort_order='asc')
         
         if df.empty:
-            print(f"今日({date})没有新股上市")
+            print(f"{date_str}没有新股上市")
             return None
             
         # 检查DataFrame包含哪些列
@@ -51,7 +54,7 @@ def get_new_stocks_today():
                     found = True
                     break
             if not found:
-                print(f"警告: 找不到任何与 '{target_col}' 相关的列")
+                # print(f"警告: 找不到任何与 '{target_col}' 相关的列")
                 selected_columns[target_col] = None
         
         # 构建结果DataFrame
@@ -114,42 +117,22 @@ def format_stock_data(df):
     
     return markdown_content
 
-def notify_new_stocks():
-    """主逻辑：获取新股信息并发送到钉钉"""
-    # 检查是否为工作日
-    if not is_workday(datetime.now()):
-        print("今日非交易日，跳过执行")
-        return
-    
+def notify_new_stocks(date=None):
+    """主逻辑：获取新股信息并发送到钉钉，支持指定日期"""
     # 获取新股数据
-    new_stocks = get_new_stocks_today()
-    
+    new_stocks = get_new_stocks_today(date)
     # 格式化数据并发送到钉钉
     markdown_content = format_stock_data(new_stocks)
     send_to_dingtalk(markdown_content)
 
-def schedule_daily_job():
-    """设置每日定时任务"""
-    scheduler = BlockingScheduler()
-    
-    # 设置在每个工作日的9:00执行任务
-    scheduler.add_job(
-        notify_new_stocks,
-        CronTrigger(
-            day_of_week='mon-fri',  # 周一至周五
-            hour=9,
-            minute=0,
-            second=0
-        ),
-        id='new_stock_notification'
-    )
-    
-    print("定时任务已设置，将于每个交易日9:00执行")
-    scheduler.start()
+def xingutixing_rtime_jobs():
+    times = [(9, 10)]
+    schedule_trade_day_jobs(notify_new_stocks, times)
+
 
 if __name__ == "__main__":
-    # 直接执行一次测试
-    notify_new_stocks()
-    
+    # 直接执行一次测试（可指定日期）
+    # notify_new_stocks()  # 默认今天
+    # notify_new_stocks("2025-06-25")  # 示例：指定日期
     # 设置定时任务
-    # schedule_daily_job()
+    xingutixing_rtime_jobs()
