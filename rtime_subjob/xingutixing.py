@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from chinese_calendar import is_workday
 from core.utils import schedule_trade_day_jobs
 import pandas as pd
+from core.singleton_trade_date import stock_trade_date
 
 # 钉钉机器人配置
 DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=0658b0d8ab22e663316d48031e4049fdc20db6d4a15fe4bd23c106ff69ca0103"
@@ -97,42 +98,82 @@ def send_to_dingtalk(content):
     else:
         print(f"请求失败，状态码: {response.status_code}")
 
-def format_stock_data(df):
-    """将股票数据格式化为Markdown表格"""
+def format_stock_data_v2(df, title, show_date_col=False):
+    """
+    通用新股表格格式化，支持可选上市日期列
+    """
     if df is None or df.empty:
-        return "今日没有新股上市"
-    
-    markdown_content = "### 🚀 今日新股上市提醒\n"
-    markdown_content += "| 代码 | 名称 | 行业 | 发行价 | 发行市盈率 |\n"
-    markdown_content += "|------|------|------|--------|------------|\n"
-    
+        return f"{title}\n无新股上市"
+    if show_date_col:
+        header = "| 上市日期 | 代码 | 名称 | 行业 | 发行价 | 发行市盈率 |\n"
+        sep =   "|----------|------|------|------|--------|------------|\n"
+    else:
+        header = "| 代码 | 名称 | 行业 | 发行价 | 发行市盈率 |\n"
+        sep =   "|------|------|------|--------|------------|\n"
+    markdown_content = f"### 🚀 {title}\n" + header + sep
     for _, row in df.iterrows():
         code = row.get('股票代码', 'N/A')
         name = row.get('股票简称', 'N/A')
         industry = row.get('行业', 'N/A')
         price = row.get('发行价', 'N/A')
         pe = row.get('发行市盈率', 'N/A')
-        
-        markdown_content += f"| {code} | {name} | {industry} | {price} | {pe} |\n"
-    
+        if show_date_col:
+            date_ = row.get('上市日期', 'N/A')
+            markdown_content += f"| {date_} | {code} | {name} | {industry} | {price} | {pe} |\n"
+        else:
+            markdown_content += f"| {code} | {name} | {industry} | {price} | {pe} |\n"
     return markdown_content
 
-def notify_new_stocks(date=None):
-    """主逻辑：获取新股信息并发送到钉钉，支持指定日期"""
-    # 获取新股数据
-    new_stocks = get_new_stocks_today(date)
-    # 格式化数据并发送到钉钉
-    markdown_content = format_stock_data(new_stocks)
-    send_to_dingtalk(markdown_content)
+def send_new_stocks_to_dingtalk(df, title, show_date_col=False):
+    content = format_stock_data_v2(df, title, show_date_col)
+    send_to_dingtalk(content)
+
+def get_last_n_trade_dates(n=5):
+    trade_dates = sorted(stock_trade_date().get_data())
+    today = datetime.now().date()
+    # 找到今天在交易日历中的索引
+    if today in trade_dates:
+        idx = trade_dates.index(today)
+    else:
+        # 如果今天不是交易日，找最近的前一个交易日
+        idx = max(i for i, d in enumerate(trade_dates) if d < today)
+    # 取前n个交易日（含今天/最近交易日）
+    return [trade_dates[idx - i].strftime("%Y-%m-%d") for i in range(n) if idx - i >= 0]
+
+def get_new_stocks_last_n_days(n=5):
+    """获取近n个交易日（含今天或最近交易日）新股，返回合并后的DataFrame"""
+    all_data = []
+    for day in get_last_n_trade_dates(n):
+        df = get_new_stocks_today(day)
+        if df is not None and not df.empty:
+            df.insert(0, '上市日期', day)
+            all_data.append(df)
+    if all_data:
+        return pd.concat(all_data, ignore_index=True)
+    else:
+        return None
+
+def notify_new_stocks_all(n_days=5, date=None):
+    """
+    先推送近n个交易日新股，再推送指定日期新股（如有），两者都推送。
+    """
+    # 1. 推送近n个交易日新股
+    df_n = get_new_stocks_last_n_days(n_days)
+    send_new_stocks_to_dingtalk(df_n, f"近{n_days}个交易日新股上市提醒", show_date_col=True)
+    # 2. 推送指定日期新股（如有）
+    if date is not None:
+        df_d = get_new_stocks_today(date)
+        send_new_stocks_to_dingtalk(df_d, f"{date}新股上市提醒", show_date_col=False)
 
 def xingutixing_rtime_jobs():
     times = [(9, 10)]
-    schedule_trade_day_jobs(notify_new_stocks, times)
-
+    def job():
+        today = datetime.now().date()
+        notify_new_stocks_all(5, today)
+    schedule_trade_day_jobs(job, times)
 
 if __name__ == "__main__":
-    # 直接执行一次测试（可指定日期）
-    # notify_new_stocks()  # 默认今天
-    # notify_new_stocks("2025-06-25")  # 示例：指定日期
+    # day = datetime.now().date()
+    # notify_new_stocks_all(5, day)  # 查询近5日新股并推送
     # 设置定时任务
     xingutixing_rtime_jobs()
