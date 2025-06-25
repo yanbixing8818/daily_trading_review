@@ -9,6 +9,12 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from core.utils import schedule_trade_day_jobs
 from core.database import executeSql, executeSqlFetch, checkTableIsExist
 
+# 覆写数据库名和相关连接参数
+mdb.db_database = "stock_hist"  # 替换为你想用的数据库名
+mdb.MYSQL_CONN_URL = "mysql+pymysql://%s:%s@%s:%s/%s?charset=%s" % (
+    mdb.db_user, mdb.db_password, mdb.db_host, mdb.db_port, mdb.db_database, mdb.db_charset)
+mdb.MYSQL_CONN_DBAPI['database'] = mdb.db_database
+
 # 钉钉机器人配置
 DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=294d72c5b9bffddcad4e0220070a9df8104e5e8a3f161461bf2839cfd163b471"
 KEYWORD = "整点数据汇报"  # 钉钉机器人的关键词
