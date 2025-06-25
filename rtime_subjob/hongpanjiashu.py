@@ -7,6 +7,7 @@ from core.crawling.stock_hist_em import stock_zh_a_spot_em
 import requests
 from apscheduler.schedulers.blocking import BlockingScheduler
 from core.utils import schedule_trade_day_jobs
+from core.database import executeSql, executeSqlFetch, checkTableIsExist
 
 # 钉钉机器人配置
 DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=294d72c5b9bffddcad4e0220070a9df8104e5e8a3f161461bf2839cfd163b471"
@@ -43,53 +44,64 @@ def calculate_market_overview(df):
     }
     return overview
 
+def ensure_up_stocks_table():
+    sql = '''
+    CREATE TABLE IF NOT EXISTS up_stocks_count (
+        date VARCHAR(10) NOT NULL,
+        time_str VARCHAR(10) NOT NULL,
+        up_count INT,
+        PRIMARY KEY(date, time_str)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    '''
+    executeSql(sql)
+
 def save_up_stocks_count(time_str, up_count):
     """
-    保存指定时间点的红盘家数到同一个CSV文件（up_stocks.csv），每天为一行，最新数据在最上面。
+    保存指定时间点的红盘家数到表 up_stocks_count，每天多行，主键(date, time_str)
     """
-    filename = './data/up_stocks.csv'
-    columns = ['9:25', '10:00', '11:00', '13:00', '14:00', '15:00']
+    ensure_up_stocks_table()
     today = datetime.now().strftime('%Y-%m-%d')
-    if os.path.exists(filename):
-        df = pd.read_csv(filename, index_col=0)
-    else:
-        df = pd.DataFrame(columns=columns)
-        df.index.name = '日期'
-    if today not in df.index:
-        # 新的一天，插入到最前面
-        new_row = pd.DataFrame([[None]*len(columns)], columns=columns, index=[today])
-        df = pd.concat([new_row, df])
-    # 强制保存为整数
-    df.at[today, time_str] = int(up_count) if pd.notnull(up_count) else None
-    df.to_csv(filename)
+    # 插入或更新
+    sql = '''REPLACE INTO up_stocks_count (date, time_str, up_count) VALUES (%s, %s, %s)'''
+    executeSql(sql, (today, time_str, int(up_count) if pd.notnull(up_count) else None))
 
-def send_up_stocks_csv_to_dingtalk():
+def send_up_stocks_table_to_dingtalk():
     """
-    读取up_stocks.csv前5行，每行数据用 | 分隔，缺失数据用' ------ '占位，每行一行，拼成字符串后用dingtalk_text发送，确保钉钉换行。
+    读取up_stocks_count表最近5天的数据，每天按时间点升序排列，格式化后推送
     """
-    try:
-        df = pd.read_csv('./data/up_stocks.csv', index_col=0)
-        df.index = pd.to_datetime(df.index, errors='coerce', infer_datetime_format=True).strftime('%m-%d')
-        lines = []
-        header = ['日期'] + list(df.columns)
-        lines.append(' | '.join(header))
-        for idx, row in df.head(5).iterrows():
-            line = [str(idx)]
-            for col in df.columns:
-                val = row[col]
-                if pd.isna(val):
-                    val = ' ---- '
-                line.append(str(val))
-            lines.append(' | '.join(line))
-        msg = '\n'.join(lines)
-        dingtalk_text(msg)
-    except Exception as e:
-        print(f"读取up_stocks.csv失败: {e}")
-
+    ensure_up_stocks_table()
+    columns = ['9:25', '10:00', '11:00', '13:00', '14:00', '15:00']
+    # 查询最近5天日期
+    sql_dates = "SELECT DISTINCT date FROM up_stocks_count ORDER BY date DESC LIMIT 5"
+    rows = executeSqlFetch(sql_dates)
+    if not rows:
+        dingtalk_text('无红盘家数数据')
+        return
+    dates = [r[0] for r in rows]
+    # 查询这些日期的所有数据
+    sql_data = f"SELECT date, time_str, up_count FROM up_stocks_count WHERE date IN ({','.join(['%s']*len(dates))})"
+    data_rows = executeSqlFetch(sql_data, dates)
+    # 组织为 {date: {time_str: up_count}}
+    from collections import defaultdict
+    table = defaultdict(dict)
+    for d, t, c in data_rows:
+        table[d][t] = c
+    # 格式化输出
+    lines = []
+    header = ['日期'] + columns
+    lines.append(' | '.join(header))
+    for date in dates:
+        line = [date[5:]]  # MM-DD
+        for col in columns:
+            val = table[date].get(col, ' ---- ')
+            line.append(str(val) if val is not None else ' ---- ')
+        lines.append(' | '.join(line))
+    msg = '\n'.join(lines)
+    dingtalk_text(msg)
 
 def hongpanjiashu():
     """
-    获取实时数据并推送红盘家数，并将csv前5行以自定义文本格式通过钉钉发送（每行一行，字段用 | 分隔，避免钉钉竖表渲染问题）
+    获取实时数据并推送红盘家数，并将表前5天以自定义文本格式通过钉钉发送（每行一行，字段用 | 分隔，避免钉钉竖表渲染问题）
     """
     now_str = datetime.now().strftime('%H:%M').lstrip('0')
     stock_zh_a_spot_em_df = stock_zh_a_spot_em()
@@ -97,8 +109,8 @@ def hongpanjiashu():
     up_count = overview['上涨家数']
     save_up_stocks_count(now_str, up_count)
     print(f"{now_str} 上涨家数: {up_count} 已保存。")
-    # 打印csv文件前5行，并构造自定义文本格式
-    send_up_stocks_csv_to_dingtalk()
+    # 打印表前5天，并构造自定义文本格式
+    send_up_stocks_table_to_dingtalk()
 
 def hongpanjiashu_rtime_jobs():
     print("红盘家数任务已启动, 9:25, 10:00, 11:00, 13:00, 14:00, 15:00, 等待触发...")
