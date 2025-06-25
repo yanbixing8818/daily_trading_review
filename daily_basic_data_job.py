@@ -24,13 +24,13 @@ def job():
     get_all_hist_k_data_and_save(start_date_str, end_date_str)
 
     #计算异动情况
-    send_abnormal_to_dingtalk()
+    #send_abnormal_to_dingtalk()
 
     #更新股票的rps
-    RPS(today, 5)
-    send_rps_5_top50_to_dingtalk()
+    #RPS(today, 5)
+    #send_rps_5_top50_to_dingtalk()
 
 if __name__ == '__main__':
-    schedule_trade_day_jobs(job, [(18, 00)])
-    # job()
+    #schedule_trade_day_jobs(job, [(18, 00)])
+    job()
 
