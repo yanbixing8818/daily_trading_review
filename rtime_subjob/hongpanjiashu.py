@@ -5,6 +5,7 @@ import pandas as pd
 from datetime import datetime
 from core.crawling.stock_hist_em import stock_zh_a_spot_em
 import requests
+import core.database as mdb
 from apscheduler.schedulers.blocking import BlockingScheduler
 from core.utils import schedule_trade_day_jobs
 from core.database import executeSql, executeSqlFetch, checkTableIsExist
