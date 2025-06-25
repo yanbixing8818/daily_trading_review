@@ -8,6 +8,7 @@ import requests
 from apscheduler.schedulers.blocking import BlockingScheduler
 from chinese_calendar import is_workday
 from core.utils import schedule_trade_day_jobs
+from core.database import executeSql, executeSqlFetch
 
 # 钉钉机器人配置
 DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=294d72c5b9bffddcad4e0220070a9df8104e5e8a3f161461bf2839cfd163b471"
@@ -65,9 +66,62 @@ def calculate_market_overview(df):
     return overview
 
 
+def ensure_market_overview_table():
+    sql = '''
+    CREATE TABLE IF NOT EXISTS market_overview (
+        date VARCHAR(10) NOT NULL,
+        time_str VARCHAR(10) NOT NULL,
+        total_amount FLOAT,
+        PRIMARY KEY(date, time_str)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    '''
+    executeSql(sql)
+
+
+def save_market_overview(time_str, total_amount):
+    ensure_market_overview_table()
+    today = datetime.now().strftime('%Y-%m-%d')
+    sql = '''REPLACE INTO market_overview (date, time_str, total_amount) VALUES (%s, %s, %s)'''
+    executeSql(sql, (today, time_str, total_amount))
+
+
+def send_market_overview_table_to_dingtalk():
+    ensure_market_overview_table()
+    columns = ['10:00', '11:00', '13:00', '14:00', '15:00']
+    # 查询最近5天日期
+    sql_dates = "SELECT DISTINCT date FROM market_overview ORDER BY date DESC LIMIT 5"
+    rows = executeSqlFetch(sql_dates)
+    if not rows:
+        dingtalk_markdown('无市场总成交额数据')
+        return
+    dates = [r[0] for r in rows]
+    # 查询这些日期的所有数据
+    sql_data = f"SELECT date, time_str, total_amount FROM market_overview WHERE date IN ({','.join(['%s']*len(dates))})"
+    data_rows = executeSqlFetch(sql_data, dates)
+    # 组织为 {date: {time_str: total_amount}}
+    from collections import defaultdict
+    table = defaultdict(dict)
+    for d, t, c in data_rows:
+        table[d][t] = c
+    # 格式化输出
+    lines = []
+    header = ['日期'] + columns
+    lines.append(' | '.join(header))
+    for date in dates:
+        line = [date[5:]]  # MM-DD
+        for col in columns:
+            val = table[date].get(col, ' ---- ')
+            if val is not None and val != ' ---- ':
+                val = f"{val:.2f}"
+            line.append(str(val) if val is not None else ' ---- ')
+        lines.append(' | '.join(line))
+    msg = '\n'.join(lines)
+    dingtalk_markdown(msg)
+
+
 def shichanggailan():
     """
-    获取市场数据并推送到钉钉
+    获取市场数据并推送到钉钉，并记录总成交额到表，推送近5日表格
     """
     # 仅在交易日执行
     if not is_workday(datetime.now()):
@@ -76,10 +130,13 @@ def shichanggailan():
     now_str = datetime.now().strftime('%H:%M').lstrip('0')
     stock_zh_a_spot_em_df = stock_zh_a_spot_em()
     overview = calculate_market_overview(stock_zh_a_spot_em_df)
+    total_amount = overview.get('总成交额(亿)', 0)
+    save_market_overview(now_str, total_amount)
     markdown_content = f"### 🕘 {now_str} A股市场快报\n"
     for k, v in overview.items():
         markdown_content += f"- {k}: {v}\n"
     dingtalk_markdown(markdown_content)
+    send_market_overview_table_to_dingtalk()
 
 
 def shichanggailan_rtime_jobs():
@@ -90,6 +147,7 @@ def shichanggailan_rtime_jobs():
 
 if __name__ == "__main__":
     shichanggailan_rtime_jobs()
+    # shichanggailan()
 
 
 
