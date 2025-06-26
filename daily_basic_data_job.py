@@ -31,6 +31,6 @@ def job():
     #send_rps_5_top50_to_dingtalk()
 
 if __name__ == '__main__':
-    #schedule_trade_day_jobs(job, [(18, 00)])
-    job()
+    schedule_trade_day_jobs(job, [(18, 00)])
+    # job()
 
