@@ -18,7 +18,7 @@ mdb.MYSQL_CONN_DBAPI['database'] = mdb.db_database
 
 # 钉钉机器人配置
 DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=294d72c5b9bffddcad4e0220070a9df8104e5e8a3f161461bf2839cfd163b471"
-KEYWORD = "整点数据汇报"  # 钉钉机器人的关键词
+KEYWORD = "整点红盘家数汇报"  # 钉钉机器人的关键词
 
 def dingtalk_text(content):
     headers = {"Content-Type": "application/json"}
@@ -126,5 +126,6 @@ def hongpanjiashu_rtime_jobs():
 
 if __name__ == "__main__":
     hongpanjiashu_rtime_jobs()
+    # hongpanjiashu()
 
 

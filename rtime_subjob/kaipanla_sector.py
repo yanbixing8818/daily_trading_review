@@ -4,11 +4,12 @@ import json
 import os
 import time
 from apscheduler.schedulers.blocking import BlockingScheduler
+from core.trade_time import is_trade_date
 
 # ================= 配置文件 =================
 HISTORY_FILE = 'sector_ranking.json'  # 板块排名历史记录文件
-DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=294d72c5b9bffddcad4e0220070a9df8104e5e8a3f161461bf2839cfd163b471"
-KEYWORD = "整点数据汇报"  # 钉钉机器人自定义关键字（必须与设置完全匹配）
+DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=40b6a6a19c21011d660f9b253995ef6288b60a15d91be256b23fc94c6d7431cf"
+KEYWORD = "盘中板块强度"  # 钉钉机器人自定义关键字（必须与设置完全匹配）
 
 
 # ================= 股票数据获取函数 =================
@@ -152,6 +153,15 @@ def send_dingtalk_message(content):
 
 # ================= 核心业务逻辑 =================
 def fetch_and_send():
+    now = datetime.datetime.now()
+    # 判断是否为交易日
+    if not is_trade_date(now.date()):
+        print("非交易日，不执行任务")
+        return
+    # 判断是否在9:20~15:00之间
+    if not (datetime.time(9, 20) <= now.time() < datetime.time(15, 0)):
+        print("非指定时间段，不执行任务")
+        return
     try:
         date_str = datetime.date.today().strftime("%Y-%m-%d")
         print(f"{datetime.datetime.now().strftime('%H:%M:%S')} 开始获取板块数据...")

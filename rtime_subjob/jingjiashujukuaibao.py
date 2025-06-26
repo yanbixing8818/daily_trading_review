@@ -10,7 +10,7 @@ from core.utils import schedule_trade_day_jobs
 # 钉钉机器人配置
 DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=e875a0032d7f7884c9f2c65e454e7f89c9c296b872218dbe939647b11a708403"
 SECRET = "SEC0c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8"  # 请替换为你的加签密钥
-KEYWORD = "9.28竞价数据快报"  # 钉钉机器人的关键词
+KEYWORD = "竞价选股"  # 钉钉机器人的关键词
 
 def get_auction_data():
     try:
@@ -42,7 +42,7 @@ def jingjiashujukuaibao():
     data = get_auction_data()
     if data is not None:
         # 生成Markdown表格
-        markdown_content = "### 🕘 9:27 竞价数据快报\n"
+        markdown_content = "###🕘竞价选股\n"
         markdown_content += "| 代码 | 名称 |\n"
         markdown_content += "|------|------|\n"
         for _, row in data.iterrows():

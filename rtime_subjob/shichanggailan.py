@@ -11,8 +11,8 @@ from core.utils import schedule_trade_day_jobs
 from core.database import executeSql, executeSqlFetch
 
 # 钉钉机器人配置
-DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=294d72c5b9bffddcad4e0220070a9df8104e5e8a3f161461bf2839cfd163b471"
-KEYWORD = "整点数据汇报"  # 钉钉机器人的关键词
+DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=5d1d031097f230cd5d9af236258278e9cc24c5a26826f4eedd8057873c747ba0"
+KEYWORD = "整点成交量汇报"  # 钉钉机器人的关键词
 
 
 def dingtalk_markdown(content, title="A股市场监控提醒", at_mobiles=None, is_at_all=False):
