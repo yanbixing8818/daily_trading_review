@@ -49,7 +49,7 @@ TABLE_CN_STOCK_SPOT = {'name': 'cn_stock_spot', 'cn': '每日股票数据',
                                    'listing_date': {'type': DATE, 'cn': '上市时间', 'size': 110}}}
 
 
-# 这段代码定义了一个名为 TABLE_CN_ETF_SPOT 的字典，用于描述“每日ETF数据”表的结构信息。
+# 这段代码定义了一个名为 TABLE_CN_ETF_SPOT 的字典，用于描述"每日ETF数据"表的结构信息。
 # 主要内容如下：
 # - 'name': 数据库中表的名称，这里是 'cn_etf_spot'。
 # - 'cn': 表的中文名称，这里是 '每日ETF数据'。
@@ -94,14 +94,36 @@ TABLE_CN_BAOSTOCK_CODE_MAP = {
 }
 
 
-
-
-
 def get_field_types(cols):
     data = {}
     for k in cols:
         data[k] = cols[k]['type']
     return data
+
+
+# 250日新高行业统计表结构
+table_high_250d = {
+    'name': 'high_250d_stocks',
+    'cn': '250日新高行业统计',
+    'columns': {
+        'date': {'type': DATE, 'cn': '日期', 'size': 0},
+        'industry': {'type': VARCHAR(64), 'cn': '行业简称', 'size': 64},
+        'stock_count': {'type': SmallInteger, 'cn': '数量', 'size': 10},
+        'stock_list': {'type': VARCHAR(1024), 'cn': '股票列表', 'size': 0}
+    }
+}
+
+# 120日新高行业统计表结构
+table_high_120d = {
+    'name': 'high_120d_stocks',
+    'cn': '120日新高行业统计',
+    'columns': {
+        'date': {'type': DATE, 'cn': '日期', 'size': 0},
+        'industry': {'type': VARCHAR(64), 'cn': '行业简称', 'size': 64},
+        'stock_count': {'type': SmallInteger, 'cn': '数量', 'size': 10},
+        'stock_list': {'type': VARCHAR(1024), 'cn': '股票列表', 'size': 0}
+    }
+}
 
 
 
