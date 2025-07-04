@@ -13,6 +13,7 @@ import logging
 from datetime import datetime, timedelta
 import joblib
 import glob
+import matplotlib.pyplot as plt
 
 # 配置日志和参数
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -28,7 +29,16 @@ CONFIG = {
 }
 
 def get_stock_list():
-    """从本地通达信目录提取A股6位代码（不联网）"""
+    """
+    从本地通达信目录提取A股代码（不联网）。
+    只保留以下板块：
+    - 沪市主板：600、601、603、605开头（上交所）
+    - 科创板：688开头（上交所）
+    - 深市主板：000、001、002、003开头（深交所）
+    - 创业板：300、301开头（深交所）
+    - 北交所普通股：83、87开头（北交所）
+    返回格式如sh600000、sz000001。
+    """
     tdx_path = CONFIG['tdx_path']
     code_set = set()
     for market in ['sh', 'sz']:
@@ -40,7 +50,7 @@ def get_stock_list():
         print(f"{market}市场day文件数: {len(files)}")
         for f in files:
             fname = os.path.splitext(os.path.basename(f))[0]
-            # 只要以sh/SH/sz/SZ开头，后面6位或更多数字都收
+            # 只要以sh/sz开头，后面全为数字
             if (fname.startswith('sh') or fname.startswith('sz')) and fname[2:].isdigit():
                 code = fname[2:]
                 # 只保留指定板块规则
@@ -94,11 +104,13 @@ def calculate_features(df):
         # RSI指标
         df['RSI_14'] = talib.RSI(df['close'], timeperiod=14)
         
-        # 竞价特征
+        # 竞价特征部分：
+        # 如果数据中包含'pre_open'这一列，说明有集合竞价的开盘价和成交量信息。
+        # pre_open_change 计算今日集合竞价开盘价相对于昨日收盘价的涨跌幅。
+        # pre_volume_ratio 计算集合竞价成交量与最近5日平均日成交量的比值，衡量竞价活跃度。
         if 'pre_open' in df.columns:
             df['pre_open_change'] = (df['pre_open'] - df['close'].shift(1)) / df['close'].shift(1)
             df['pre_volume_ratio'] = df['pre_volume'] / df['volume'].rolling(5).mean()
-        
         # 目标变量：未来3日涨幅超过5%
         df['target'] = (df['close'].shift(-3) / df['close'] - 1 > 0.05).astype(int)
         
@@ -108,33 +120,36 @@ def calculate_features(df):
         return None
 
 def prepare_dataset(stock_list):
-    """准备训练数据集[6,9](@ref)"""
+    """
+    遍历股票池，读取本地日线数据，计算特征，拼接训练集。
+    - 对每只股票，先用get_local_data(symbol)读取日线数据
+    - 用calculate_features(data)计算技术指标和目标变量
+    - 丢弃无数据或特征为空的股票
+    - 拼接所有股票的特征和标签到X、y
+    - 用StandardScaler做归一化
+    - 返回归一化特征、标签和scaler
+    """
     X, y = [], []
     
-    for symbol in stock_list:  # 限制股票数量避免内存溢出
+    for symbol in stock_list:  # 遍历所有股票
         data = get_local_data(symbol)
         if data is None:
             print(f"{symbol} 无本地数据")
             continue
-        
         data_with_features = calculate_features(data)
         if data_with_features is None or data_with_features.empty:
             print(f"{symbol} 特征为空")
             continue
-        
         # 排除目标列
         features = data_with_features.drop(['target'], axis=1).values
         targets = data_with_features['target'].values
-        
         X.extend(features)
         y.extend(targets)
         # logger.info(f"处理完成: {symbol}")
-    
     print(f"最终特征样本数: {len(X)}")
     # 数据标准化
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
-    
     return X_scaled, np.array(y), scaler
 
 def train_xgboost(X_train, y_train, X_val, y_val):
@@ -263,8 +278,35 @@ def save_results(results, filename="selected_stocks.csv"):
         df.to_csv(filename, index=False)
     logger.info(f"选股结果已保存到{filename}")
 
+def plot_and_save_feature_importance(model, feature_names, model_type, filename):
+    """
+    绘制并保存特征重要性条形图
+    model_type: 'xgb' 或 'lgb'
+    """
+    if model_type == 'xgb':
+        importances = model.feature_importances_
+    elif model_type == 'lgb':
+        importances = model.feature_importance(importance_type='gain')
+    else:
+        raise ValueError('未知模型类型')
+    indices = np.argsort(importances)[::-1]
+    plt.figure(figsize=(10, 6))
+    plt.title(f"{model_type.upper()} Feature Importance")
+    plt.bar(range(len(importances)), importances[indices], align="center")
+    plt.xticks(range(len(importances)), np.array(feature_names)[indices], rotation=90)
+    plt.tight_layout()
+    plt.savefig(filename)
+    plt.close()
+    logger.info(f"{model_type.upper()}特征重要性已保存到 {filename}")
+
 def main():
-    """主程序流程"""
+    """
+    主程序流程：
+    - 训练或加载模型
+    - 每日选股
+    - 输出和保存结果
+    - 新增：保存整理好的训练特征数据到csv
+    """
     os.makedirs(CONFIG['model_dir'], exist_ok=True)
     
     # 模型训练或加载
@@ -273,25 +315,33 @@ def main():
         logger.info("加载预训练模型")
         xgb_model, lgb_model, scaler = load_models()
         models = (xgb_model, lgb_model)
+        # 由于特征名未保存，尝试从train_features.csv读取
+        feature_df = pd.read_csv('train_features.csv')
+        feature_names = feature_df.columns[:-1]  # 最后一列是label
     else:
         logger.info("训练新模型")
         stock_list = get_stock_list()
         X, y, scaler = prepare_dataset(stock_list)
-        
+        # 保存特征数据到csv
+        feature_df = pd.DataFrame(X)
+        feature_df['label'] = y
+        feature_df.to_csv('train_features.csv', index=False)
+        logger.info("已保存训练特征数据到 train_features.csv")
+        feature_names = feature_df.columns[:-1]
         # 数据集划分
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=CONFIG['test_size'], random_state=42
         )
-        
         # 训练模型
         logger.info("训练XGBoost模型...")
         xgb_model = train_xgboost(X_train, y_train, X_test, y_test)
-        
         logger.info("训练LightGBM模型...")
         lgb_model = train_lightgbm(X_train, y_train, X_test, y_test)
-        
         models = (xgb_model, lgb_model)
         save_models(models, scaler)
+    # 特征重要性分析并保存图片
+    plot_and_save_feature_importance(models[0], feature_names, 'xgb', 'xgb_feature_importance.png')
+    plot_and_save_feature_importance(models[1], feature_names, 'lgb', 'lgb_feature_importance.png')
     
     # 每日选股
     logger.info("开始每日选股...")
