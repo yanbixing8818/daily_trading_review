@@ -14,6 +14,9 @@ from datetime import datetime, timedelta
 import joblib
 import glob
 import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
+matplotlib.rcParams['axes.unicode_minus'] = False
 
 # 配置日志和参数
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -26,6 +29,27 @@ CONFIG = {
     'test_size': 0.2,              # 测试集比例
     'top_n': 10,                   # 每日选股数量
     'fusion_weights': (0.4, 0.6)  # XGBoost和LightGBM融合权重
+}
+
+# 特征英文名到中文名的映射
+FEATURE_NAME_MAP = {
+    'ret_1d': '1日收益率',
+    'volatility_5d': '5日波动率',
+    'MA_5': '5日均线',
+    'MA_10': '10日均线',
+    'MA_20': '20日均线',
+    'MACD': 'MACD',
+    'MACD_Signal': 'MACD信号线',
+    'RSI_14': '14日RSI',
+    'pre_open_change': '竞价涨跌幅',
+    'pre_volume_ratio': '竞价量比',
+    'open': '开盘价',
+    'close': '收盘价',
+    'high': '最高价',
+    'low': '最低价',
+    'volume': '成交量',
+    'pre_open': '竞价开盘价',
+    'pre_volume': '竞价成交量',
 }
 
 def get_stock_list():
@@ -55,11 +79,12 @@ def get_stock_list():
                 code = fname[2:]
                 # 只保留指定板块规则
                 if (
-                    code.startswith(('600', '601', '603', '605')) or
-                    code.startswith('688') or
-                    code.startswith(('000', '001', '002', '003')) or
-                    code.startswith(('300', '301')) or
-                    code.startswith(('83', '87'))
+                    # code.startswith(('600', '601', '603', '605')) or
+                    # code.startswith('688') or
+                    # code.startswith(('000', '001', '002', '003')) or
+                    # code.startswith(('300', '301')) or
+                    # code.startswith(('83', '87'))
+                    code.startswith(('300', '301'))
                 ):
                     code_set.add(fname)
     code_list = sorted(code_set)
@@ -105,14 +130,11 @@ def calculate_features(df):
         df['RSI_14'] = talib.RSI(df['close'], timeperiod=14)
         
         # 竞价特征部分：
-        # 如果数据中包含'pre_open'这一列，说明有集合竞价的开盘价和成交量信息。
-        # pre_open_change 计算今日集合竞价开盘价相对于昨日收盘价的涨跌幅。
-        # pre_volume_ratio 计算集合竞价成交量与最近5日平均日成交量的比值，衡量竞价活跃度。
         if 'pre_open' in df.columns:
             df['pre_open_change'] = (df['pre_open'] - df['close'].shift(1)) / df['close'].shift(1)
             df['pre_volume_ratio'] = df['pre_volume'] / df['volume'].rolling(5).mean()
-        # 目标变量：未来3日涨幅超过5%
-        df['target'] = (df['close'].shift(-3) / df['close'] - 1 > 0.05).astype(int)
+        # 目标变量：当天是否涨停（创业板20%）
+        df['target'] = (df['close'] / df['close'].shift(1) >= 1.20).astype(int)
         
         return df.dropna()
     except Exception as e:
@@ -293,7 +315,9 @@ def plot_and_save_feature_importance(model, feature_names, model_type, filename)
     plt.figure(figsize=(10, 6))
     plt.title(f"{model_type.upper()} Feature Importance")
     plt.bar(range(len(importances)), importances[indices], align="center")
-    plt.xticks(range(len(importances)), np.array(feature_names)[indices], rotation=90)
+    # 用中文名，没有映射的用原名
+    chinese_names = [FEATURE_NAME_MAP.get(name, name) for name in np.array(feature_names)[indices]]
+    plt.xticks(range(len(importances)), chinese_names, rotation=90)
     plt.tight_layout()
     plt.savefig(filename)
     plt.close()
@@ -322,8 +346,12 @@ def main():
         logger.info("训练新模型")
         stock_list = get_stock_list()
         X, y, scaler = prepare_dataset(stock_list)
-        # 保存特征数据到csv
-        feature_df = pd.DataFrame(X)
+        # 保存特征数据到csv，保留真实特征名
+        sample_symbol = stock_list[0]
+        sample_data = get_local_data(sample_symbol)
+        sample_features = calculate_features(sample_data)
+        feature_columns = sample_features.drop(['target'], axis=1).columns
+        feature_df = pd.DataFrame(X, columns=feature_columns)
         feature_df['label'] = y
         feature_df.to_csv('train_features.csv', index=False)
         logger.info("已保存训练特征数据到 train_features.csv")
