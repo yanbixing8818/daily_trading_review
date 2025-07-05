@@ -4,6 +4,15 @@ from datetime import datetime, timedelta
 from mootdx.reader import Reader
 import os
 import talib
+import streamlit as st
+import mplfinance as mpf
+import io
+from PIL import Image
+import matplotlib
+import matplotlib.font_manager as fm
+import matplotlib
+matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
+matplotlib.rcParams['axes.unicode_minus'] = False
 
 def get_chip_ratio(df, price_range=(0, 0.3), days=20):
     """
@@ -71,12 +80,12 @@ def detect_wash_and_distribute(stock_code, tdx_dir='C:/new_tdx', days=10):
         df = df.reset_index(drop=True)
     except Exception as e:
         print(f"读取数据失败: {e}")
-        return {'wash_dates': [], 'distribute_dates': []}
+        return {'wash_dates': [], 'distribute_dates': []}, None
     
     # 检查是否成功读取数据
     if df.empty:
         print(f"未找到股票 {stock_code} 的日线数据")
-        return {'wash_dates': [], 'distribute_dates': []}
+        return {'wash_dates': [], 'distribute_dates': []}, None
     
     # 确保df按交易日升序
     df['date'] = pd.to_datetime(df['date'])
@@ -145,25 +154,63 @@ def detect_wash_and_distribute(stock_code, tdx_dir='C:/new_tdx', days=10):
         if distribute_signal:
             distribute_dates.append(row['date'].strftime('%Y-%m-%d'))
 
-    return {
-        'wash_dates': wash_dates,
-        'distribute_dates': distribute_dates
-    }
+    return {'wash_dates': wash_dates, 'distribute_dates': distribute_dates}, df
 
-# 示例使用
-if __name__ == "__main__":
-    # 配置通达信数据目录（根据实际安装路径修改）
-    tdx_dir = '/mnt/c/new_tdx'  # 通达信默认数据目录
-    
-    # 检查目录是否存在
-    if not os.path.exists(tdx_dir):
-        print(f"错误：通达信数据目录不存在: {tdx_dir}")
-        print("请确保已安装通达信并下载历史数据")
-        print("或者手动指定正确的数据目录路径")
-    else:
-        stock_code = '301176'
-        signals = detect_wash_and_distribute(stock_code, tdx_dir=tdx_dir, days=15)
-        
-        print(f"股票 {stock_code} 检测结果:")
-        print(f"洗盘信号日期: {signals['wash_dates']}")
-        print(f"出货信号日期: {signals['distribute_dates']}")
+# Streamlit界面
+st.title('洗盘/出货信号检测')
+
+stock_code = st.text_input('请输入股票代码（如301176）:')
+
+# 增加按钮，只有点击后才计算
+if st.button('检测信号') and stock_code:
+    tdx_dir = '/mnt/c/new_tdx'
+    signals, df = detect_wash_and_distribute(stock_code, tdx_dir=tdx_dir, days=15)
+    st.write(f"股票 {stock_code} 检测结果：")
+    st.write(f"洗盘信号日期: {signals['wash_dates']}")
+    st.write(f"出货信号日期: {signals['distribute_dates']}")
+    st.table({
+        '洗盘信号日期': signals['wash_dates'],
+        '出货信号日期': signals['distribute_dates']
+    })
+
+    # 标注信号
+    apds = []
+    # 只显示最近20天
+    df_plot = df.tail(20).copy()
+    # 洗盘信号
+    wash_y = pd.Series(np.nan, index=df_plot.index)
+    if signals['wash_dates']:
+        wash_mask = df_plot['date'].dt.strftime('%Y-%m-%d').isin(signals['wash_dates'])
+        wash_y[wash_mask] = df_plot.loc[wash_mask, 'low'] * 0.98
+        apds.append(mpf.make_addplot(wash_y, type='scatter', markersize=100, marker='^', color='blue'))
+    # 出货信号
+    dist_y = pd.Series(np.nan, index=df_plot.index)
+    if signals['distribute_dates']:
+        dist_mask = df_plot['date'].dt.strftime('%Y-%m-%d').isin(signals['distribute_dates'])
+        dist_y[dist_mask] = df_plot.loc[dist_mask, 'high'] * 1.02
+        apds.append(mpf.make_addplot(dist_y, type='scatter', markersize=100, marker='v', color='red'))
+
+    # 绘制K线图到内存
+    fig, axlist = mpf.plot(
+        df_plot.set_index('date'),
+        type='candle',
+        mav=(5, 10, 20),
+        addplot=apds if apds else None,
+        returnfig=True,
+        figsize=(10, 6),
+        title=f"{stock_code} K线及信号"
+    )
+    # 在图片左上角添加图例说明
+    legend_text = (
+        "图例说明：\n"
+        "蓝线：5日均线\n"
+        "橙线：10日均线\n"
+        "紫线：20日均线\n"
+        "蓝色上三角：洗盘信号\n"
+        "红色下三角：出货信号"
+    )
+    fig.text(0.01, 0.99, legend_text, fontsize=12, color='black', ha='left', va='top', linespacing=1.5, bbox=dict(facecolor='white', alpha=0.7, edgecolor='none'))
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png')
+    buf.seek(0)
+    st.image(buf, caption=f"{stock_code} K线及信号")
