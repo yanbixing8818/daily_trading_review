@@ -191,15 +191,25 @@ if st.button('检测信号') and stock_code:
         apds.append(mpf.make_addplot(dist_y, type='scatter', markersize=100, marker='v', color='red'))
 
     # 绘制K线图到内存
-    fig, axlist = mpf.plot(
-        df_plot.set_index('date'),
-        type='candle',
-        mav=(5, 10, 20),
-        addplot=apds if apds else None,
-        returnfig=True,
-        figsize=(10, 6),
-        title=f"{stock_code} K线及信号"
-    )
+    if apds:
+        fig, axlist = mpf.plot(
+            df_plot.set_index('date'),
+            type='candle',
+            mav=(5, 10, 20),
+            addplot=apds,
+            returnfig=True,
+            figsize=(10, 6),
+            title=f"{stock_code} K线及信号"
+        )
+    else:
+        fig, axlist = mpf.plot(
+            df_plot.set_index('date'),
+            type='candle',
+            mav=(5, 10, 20),
+            returnfig=True,
+            figsize=(10, 6),
+            title=f"{stock_code} K线及信号"
+        )
     # 在图片左上角添加图例说明
     legend_text = (
         "图例说明：\n"
