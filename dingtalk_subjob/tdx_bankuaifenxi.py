@@ -1,19 +1,35 @@
+# 通达信板块指数分析
+# 1. 提取板块指数代码和名称
+# 2. 计算板块指数的两种日涨幅：
+#    - change: (close-open)/open*100       //板块的赚钱效应
+#    - pct_change: (close/close.shift(1)-1)*100  //板块的真正百分比涨幅 
+# 3. 保存中间过程到csv
+# 4. 获取每日涨幅前10的板块指数 
+
+#使用方法：需要自己下载通达信的数据后再运行。
+# 1. 盘后数据下载：选项->盘后数据下载->日线数据->勾选日线和实时行情数据->开始下载；
+# 2. 概念导出：选项->数据导出->板块成分导出->选择导出文件夹->开始导出；
+# 3. 将导出的文件放在dingtalk_subjob/tdx_bankuai目录下，目前只放：概念板块.txt和行业板块.txt;
+# 3. 运行脚本：python3 -m dingtalk_subjob.tdx_bankuaifenxi
+
+
 import pandas as pd
 import numpy as np
 from mootdx.reader import Reader
 from datetime import datetime, timedelta
 import os
 import glob
+from core.trade_time import stock_trade_date  # 新增导入
 
 # 配置参数
 CONFIG = {
     'tdx_path': '/mnt/c/new_tdx',  # 通达信安装路径
     'output_file': 'top_plate_indices.csv',  # 输出文件名
     'plate_prefixes': ['880', '885', '886', '887', '399'],  # 板块指数前缀
-    'days': 2  # 分析天数（最近一年）
+    'days': 30  # 分析天数（最近一年）
 }
 
-def load_plate_name_mapping(bankuai_dir='tdx_bankuai'):
+def load_plate_name_mapping(bankuai_dir='dingtalk_subjob/tdx_bankuai'):
     """
     读取tdx_bankuai目录下所有txt/csv文件，建立板块代码到中文名的映射dict。
     支持文件格式：每行以逗号、制表符或空格分隔，前两列分别为代码和名称。
@@ -42,6 +58,13 @@ def load_plate_name_mapping(bankuai_dir='tdx_bankuai'):
                 if encoding == 'gbk':
                     print(f"读取映射文件{file}失败: {e}")
     print(f"已加载板块名称映射数: {len(mapping)}")
+    # 调试输出前10个映射
+    for k, v in list(mapping.items())[:10]:
+        print(f"映射样例: {k} -> {v}")
+    for test_code in ['399750', '399850', '880812']:
+        print(f"测试key {test_code} 是否在映射表: {test_code in mapping}")
+        if test_code in mapping:
+            print(f"{test_code} -> {mapping[test_code]}")
     return mapping
 
 def get_plate_indices():
@@ -53,7 +76,7 @@ def get_plate_indices():
     tdx_path = CONFIG['tdx_path']
     code_set = set()
     # 加载板块名称映射
-    name_mapping = load_plate_name_mapping('tdx_bankuai')
+    name_mapping = load_plate_name_mapping('dingtalk_subjob/tdx_bankuai')
     for market in ['sh', 'sz']:
         lday_dir = os.path.join(tdx_path, f'vipdoc/{market}/lday')
         if not os.path.exists(lday_dir):
@@ -64,12 +87,12 @@ def get_plate_indices():
                 code = fname.replace('.day', '')  # sh880793
                 for prefix in CONFIG['plate_prefixes']:
                     if code[len(market):].startswith(prefix) and not code[len(market):].startswith('8800'):
-                        # 名称优先用映射表，否则用代码
-                        name = name_mapping.get(code)
-                        if not name:
-                            code_no_prefix = code[2:] if code.startswith(('sh', 'sz')) else code
-                            name = name_mapping.get(code_no_prefix, code)
-                        print(f"板块代码: {code}, 匹配到名称: {name}")
+                        code_no_prefix = code[2:] if code.startswith(('sh', 'sz')) else code
+                        name = name_mapping.get(code_no_prefix, None)
+                        if name is None:
+                            print(f"未找到中文名: code={code}, code_no_prefix={code_no_prefix}")
+                            break  # 跳过未找到中文名的板块
+                        print(f"get_plate_indices: code={code}, code_no_prefix={code_no_prefix}, name={name}")
                         code_set.add((code, name))
                         break
     plate_indices = pd.DataFrame(list(code_set), columns=['code', 'name'])
@@ -82,9 +105,29 @@ def calculate_both_changes(reader, plate_indices):
     - change: (close-open)/open*100
     - pct_change: (close/close.shift(1)-1)*100
     合并为一张表，保存中间过程到csv。
+    只分析真实交易日。
     """
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=CONFIG['days'])
+    all_trade_dates = stock_trade_date().get_data()
+    if all_trade_dates is None:
+        print("无法获取交易日历")
+        return pd.DataFrame()
+    # 先统计所有板块指数数据中实际出现过的所有日期
+    all_dates_in_data = set()
+    for _, row in plate_indices.iterrows():
+        symbol = row['code']
+        daily_data = reader.daily(symbol=symbol)
+        if daily_data is not None and not daily_data.empty:
+            all_dates_in_data.update(daily_data.index.date)
+    if not all_dates_in_data:
+        print("所有板块都没有数据")
+        return pd.DataFrame()
+    # 取交集
+    trade_dates = sorted(set([pd.to_datetime(d).date() for d in all_trade_dates]) & all_dates_in_data)
+    if len(trade_dates) < CONFIG['days']:
+        print(f'实际可用交易日只有{len(trade_dates)}天')
+    # 用实际有数据的最近N天
+    use_dates = trade_dates[-CONFIG['days']:]
+    use_dates_set = set(use_dates)
     results = []
     debug_rows = []
     for _, row in plate_indices.iterrows():
@@ -92,12 +135,12 @@ def calculate_both_changes(reader, plate_indices):
         name = row['name']
         try:
             daily_data = reader.daily(symbol=symbol)
+            # print(f"{symbol} 日线数据: {None if daily_data is None else len(daily_data)} 行")
             if daily_data is None or daily_data.empty:
                 continue
-            daily_data = daily_data[
-                (daily_data.index >= start_date) & 
-                (daily_data.index <= end_date)
-            ]
+            mask = pd.Series(daily_data.index.date, index=daily_data.index).isin(use_dates_set)
+            daily_data = daily_data.loc[mask]
+            # print(f"{symbol} 过滤后剩余: {len(daily_data)} 行, 日期: {list(daily_data.index.date)}")
             if len(daily_data) < 2:
                 continue
             daily_data['change'] = (daily_data['close'] - daily_data['open']) / daily_data['open'] * 100
@@ -136,30 +179,26 @@ def get_top_10_daily_changes(all_changes, change_col='change'):
         formatted_results.append(daily_result)
     return pd.DataFrame(formatted_results)
 
-def save_to_csv(results_df):
-    """保存结果到CSV文件"""
-    # 只在有目录时创建
-    output_dir = os.path.dirname(CONFIG['output_file'])
+def save_to_csv(results_df, output_file):
+    """保存结果到指定CSV文件"""
+    output_dir = os.path.dirname(output_file)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
-    # 保存到CSV
-    if os.path.exists(CONFIG['output_file']):
-        # 追加模式，不写入列名
+    if os.path.exists(output_file):
         results_df.to_csv(
-            CONFIG['output_file'], 
-            mode='a', 
-            header=False, 
+            output_file,
+            mode='a',
+            header=False,
             index=False,
             encoding='utf-8-sig'
         )
     else:
-        # 新文件，写入列名
         results_df.to_csv(
-            CONFIG['output_file'], 
+            output_file,
             index=False,
             encoding='utf-8-sig'
         )
-    print(f"结果已保存到 {CONFIG['output_file']}")
+    print(f"结果已保存到 {output_file}")
 
 def main():
     """主程序"""
@@ -187,9 +226,9 @@ def main():
             print("未生成有效的排名数据")
             return
         
-        # 保存结果
-        save_to_csv(top_10_results)
-        save_to_csv(top_10_results_pct)
+        # 保存结果到两个不同的csv
+        save_to_csv(top_10_results, 'top_plate_indices_change.csv')  #板块的实体涨幅
+        save_to_csv(top_10_results_pct, 'top_plate_indices_pct_change.csv')  #板块的真正百分比涨幅
         
         print("程序执行完成")
     
