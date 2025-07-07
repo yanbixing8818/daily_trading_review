@@ -26,7 +26,7 @@ CONFIG = {
     'tdx_path': '/mnt/c/new_tdx',  # 通达信安装路径
     'output_file': 'top_plate_indices.csv',  # 输出文件名
     'plate_prefixes': ['880', '885', '886', '887', '399'],  # 板块指数前缀
-    'days': 30  # 分析天数（最近一年）
+    'days': 60  # 分析天数（最近一年）
 }
 
 def load_plate_name_mapping(bankuai_dir='dingtalk_subjob/tdx_bankuai'):
@@ -180,7 +180,9 @@ def get_top_10_daily_changes(all_changes, change_col='change'):
     return pd.DataFrame(formatted_results)
 
 def save_to_csv(results_df, output_file):
-    """保存结果到指定CSV文件"""
+    """保存结果到指定CSV文件，按日期降序（最近日期在最上面）"""
+    if 'date' in results_df.columns:
+        results_df = results_df.sort_values('date', ascending=False)
     output_dir = os.path.dirname(output_file)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
@@ -200,38 +202,95 @@ def save_to_csv(results_df, output_file):
         )
     print(f"结果已保存到 {output_file}")
 
+def run_plate_analysis():
+    """执行板块指数涨幅分析主流程，保存结果到csv"""
+    # 初始化通达信读取器
+    reader = Reader.factory(market='std', tdxdir=CONFIG['tdx_path'])
+    print("通达信读取器初始化成功")
+    
+    # 获取板块指数列表
+    plate_indices = get_plate_indices()
+    if plate_indices.empty:
+        print("未找到符合条件的板块指数")
+        return
+    
+    # 计算每日涨幅
+    all_changes = calculate_both_changes(reader, plate_indices)
+    if all_changes.empty:
+        print("未获取到有效的涨幅数据")
+        return
+    
+    # 获取每日前10名
+    top_10_results = get_top_10_daily_changes(all_changes, change_col='change')
+    top_10_results_pct = get_top_10_daily_changes(all_changes, change_col='pct_change')
+    if top_10_results.empty or top_10_results_pct.empty:
+        print("未生成有效的排名数据")
+        return
+    
+    # 保存结果到两个不同的csv
+    save_to_csv(top_10_results, 'top_plate_indices_change.csv')  #板块的实体涨幅
+    save_to_csv(top_10_results_pct, 'top_plate_indices_pct_change.csv')  #板块的真正百分比涨幅
+    print("板块指数涨幅分析结果已保存")
+    return all_changes, top_10_results, top_10_results_pct
+
+def analyze_plate_results(all_changes, top_10_results, top_10_results_pct):
+    """对有中文名的概念板块，计算5/10/20/60日涨幅和RPS并保存到同一个表格"""
+    print("开始分析有中文名的概念板块多周期涨幅...")
+    if all_changes is None or all_changes.empty:
+        print("无有效数据，跳过分析")
+        return
+    # 只保留概念板块（code以880开头）且有中文名
+    df = all_changes.copy()
+    df = df[df['symbol'].str[2:5] == '880']  # symbol如sh880568
+    df = df[df['name'] != df['symbol']]     # 有中文名
+    # 计算多周期涨幅
+    result_rows = []
+    rps_rows = []
+    for symbol, group in df.groupby('symbol'):
+        name = group['name'].iloc[0]
+        group_sorted = group.sort_index(ascending=False)  # 最近日期在前
+        change_5 = group_sorted['change'].head(5).mean() if len(group_sorted) >= 5 else None
+        change_10 = group_sorted['change'].head(10).mean() if len(group_sorted) >= 10 else None
+        change_20 = group_sorted['change'].head(20).mean() if len(group_sorted) >= 20 else None
+        change_60 = group_sorted['change'].head(60).mean() if len(group_sorted) >= 60 else None
+        result_rows.append({
+            'code': symbol,
+            'name': name,
+            '5日涨幅': round(change_5, 2) if change_5 is not None else '',
+            '10日涨幅': round(change_10, 2) if change_10 is not None else '',
+            '20日涨幅': round(change_20, 2) if change_20 is not None else '',
+            '60日涨幅': round(change_60, 2) if change_60 is not None else ''
+        })
+        rps_rows.append({'code': symbol, 'chg5': change_5, 'chg10': change_10, 'chg20': change_20, 'chg60': change_60})
+    # 计算RPS归一化排名
+    rps_df = pd.DataFrame(rps_rows)
+    for n, col in zip([5, 10, 20, 60], ['chg5', 'chg10', 'chg20', 'chg60']):
+        valid = rps_df[col].notna()
+        df_sort = rps_df[valid].sort_values(col, ascending=False).reset_index(drop=True)
+        total = len(df_sort)
+        rank_col = f'rps{n}'
+        if total > 1:
+            df_sort[rank_col] = ((total - df_sort.index - 1) / (total - 1) * 100).round(2)
+        else:
+            df_sort[rank_col] = 100.0
+        rps_df = rps_df.merge(df_sort[['code', rank_col]], on='code', how='left')
+    # 合并涨幅和RPS
+    result_df = pd.DataFrame(result_rows)
+    result_df = result_df.merge(rps_df[['code', 'rps5', 'rps10', 'rps20', 'rps60']], on='code', how='left')
+    result_df = result_df.sort_values('5日涨幅', ascending=False)
+    result_df.to_csv('concept_plate_multi_period_change.csv', index=False, encoding='utf-8-sig')
+    print("多周期概念板块涨幅和RPS已保存到 concept_plate_multi_period_change.csv")
+
 def main():
     """主程序"""
     try:
-        # 初始化通达信读取器
-        reader = Reader.factory(market='std', tdxdir=CONFIG['tdx_path'])
-        print("通达信读取器初始化成功")
-        
-        # 获取板块指数列表
-        plate_indices = get_plate_indices()
-        if plate_indices.empty:
-            print("未找到符合条件的板块指数")
-            return
-        
-        # 计算每日涨幅
-        all_changes = calculate_both_changes(reader, plate_indices)
-        if all_changes.empty:
-            print("未获取到有效的涨幅数据")
-            return
-        
-        # 获取每日前10名
-        top_10_results = get_top_10_daily_changes(all_changes, change_col='change')
-        top_10_results_pct = get_top_10_daily_changes(all_changes, change_col='pct_change')
-        if top_10_results.empty or top_10_results_pct.empty:
-            print("未生成有效的排名数据")
-            return
-        
-        # 保存结果到两个不同的csv
-        save_to_csv(top_10_results, 'top_plate_indices_change.csv')  #板块的实体涨幅
-        save_to_csv(top_10_results_pct, 'top_plate_indices_pct_change.csv')  #板块的真正百分比涨幅
-        
+        # 运行主流程，获取结果
+        result = run_plate_analysis()
+        if result is not None:
+            all_changes, top_10_results, top_10_results_pct = result
+            # 可选：后续分析
+            analyze_plate_results(all_changes, top_10_results, top_10_results_pct)
         print("程序执行完成")
-    
     except Exception as e:
         print(f"程序执行出错: {str(e)}")
 
