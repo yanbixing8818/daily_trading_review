@@ -111,6 +111,15 @@ def get_outstanding_map_from_tdx(tdx_path, csv_path='outstanding_map.csv', zip_f
     :param zip_filename: 财务zip文件名（如gpcw20241231.zip），默认自动查找最新
     :return: {code: outstanding}
     """
+    if os.path.exists(csv_path):
+        df_out = pd.read_csv(csv_path, dtype={'code': str})
+        if 'code' in df_out.columns and 'outstanding' in df_out.columns:
+            return dict(zip(df_out['code'], df_out['outstanding']))
+        elif 'symbol' in df_out.columns and 'outstanding' in df_out.columns:
+            return dict(zip(df_out['symbol'], df_out['outstanding']))
+        else:
+            print(f"警告：{csv_path} 文件格式异常，将重新生成。")
+            os.remove(csv_path)
     tmp_dir = os.path.join(tdx_path, 'tmp')
     os.makedirs(tmp_dir, exist_ok=True)
     affair_reader = Affair()
@@ -218,17 +227,24 @@ def get_auction_features(symbol, date, tdx_path=CONFIG['tdx_path']):
     except Exception:
         df_min = None
     auction_features = {}
-    if df_min is not None and not df_min.empty and 'date' in df_min.columns:
-        # 保证date为int类型
-        df_min = df_min.copy()
-        df_min['date'] = df_min['date'].astype(int)
-        df_min = df_min[df_min['date'] == int(date)]
-        df_min['time_str'] = df_min['time'].astype(str).str.zfill(4)
-        df_auction = df_min[df_min['time_str'].between('0920', '0925')]
-        auction_features['auction_volume'] = df_auction['volume'].sum()
-        auction_features['auction_amount'] = df_auction['amount'].sum()
-        auction_features['auction_avg_price'] = (df_auction['amount'].sum() / df_auction['volume'].sum()
-                                                 if df_auction['volume'].sum() > 0 else np.nan)
+    if df_min is not None and not df_min.empty:
+        # 适配 index 为 DatetimeIndex 的情况
+        if isinstance(df_min.index, pd.DatetimeIndex):
+            df_min = df_min.copy()
+            df_min['date_str'] = df_min.index.strftime('%Y%m%d')
+            df_min['time_str'] = df_min.index.strftime('%H%M')
+            df_min = df_min[df_min['date_str'] == str(date)]
+            # df_auction = df_min[df_min['time_str'].between('0915', '0930')]   //为竞价留的接口
+            df_auction = df_min[df_min['time_str'] == '0931']
+            auction_features['auction_volume'] = df_auction['volume'].sum()
+            auction_features['auction_amount'] = df_auction['amount'].sum()
+            auction_features['auction_avg_price'] = (df_auction['amount'].sum() / df_auction['volume'].sum()
+                                                     if df_auction['volume'].sum() > 0 else np.nan)
+        else:
+            # 其它结构，保持原逻辑
+            auction_features['auction_volume'] = np.nan
+            auction_features['auction_amount'] = np.nan
+            auction_features['auction_avg_price'] = np.nan
     else:
         auction_features['auction_volume'] = np.nan
         auction_features['auction_amount'] = np.nan
@@ -573,6 +589,7 @@ def main():
     else:
         logger.info("训练新模型")
         stock_list = get_stock_list()
+        print("调试用股票列表：", stock_list)
         X, y, scaler, feature_columns = prepare_dataset(stock_list)
         feature_df = pd.DataFrame(X, columns=feature_columns)
         feature_df['label'] = y
