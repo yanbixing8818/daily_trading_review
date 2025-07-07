@@ -15,11 +15,15 @@ import joblib
 import glob
 import matplotlib.pyplot as plt
 import matplotlib
+import baostock as bs
+from mootdx.affair import Affair
+import csv
+
 matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
 matplotlib.rcParams['axes.unicode_minus'] = False
 
 # 配置日志和参数
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 CONFIG = {
@@ -50,8 +54,15 @@ FEATURE_NAME_MAP = {
     'volume': '成交量',
     'pre_open': '竞价开盘价',
     'pre_volume': '竞价成交量',
+    'turnover_rate': '换手率',
+    'volume_ratio': '量比',
+    'dde_net_large_order_volume': 'DDE大单净量',
+    'chip_bottom_ratio_20d': '20日底部筹码比例',
+    'chip_top_ratio_20d': '20日顶部筹码比例',
+    'chip_stability_20d': '20日筹码稳定性',
 }
 
+# ========== 获取本地A股代码列表 ==========
 def get_stock_list():
     """
     从本地通达信目录提取A股代码（不联网）。
@@ -91,88 +102,270 @@ def get_stock_list():
     logger.info(f"本地A股代码数: {len(code_list)}")
     return code_list
 
+# ========== 直接粘贴 get_outstanding_map_from_tdx 实现 ==========
+def get_outstanding_map_from_tdx(tdx_path, csv_path='outstanding_map.csv', zip_filename=None):
+    """
+    从本地通达信财务数据（gpcw*.zip）提取所有A股流通股本，保存为csv，并返回dict。
+    :param tdx_path: 通达信目录
+    :param csv_path: 输出csv路径
+    :param zip_filename: 财务zip文件名（如gpcw20241231.zip），默认自动查找最新
+    :return: {code: outstanding}
+    """
+    tmp_dir = os.path.join(tdx_path, 'tmp')
+    os.makedirs(tmp_dir, exist_ok=True)
+    affair_reader = Affair()
+    # 下载所有财务文件到tmp目录
+    affair_reader.fetch(downdir=tmp_dir)
+    # 自动查找最新zip
+    if zip_filename is None:
+        files = [f for f in os.listdir(tmp_dir) if f.startswith('gpcw') and f.endswith('.zip')]
+        if not files:
+            raise FileNotFoundError('未找到gpcw*.zip财务文件')
+        zip_filename = sorted(files)[-1]
+    print("选用zip文件：", zip_filename)
+    # 解析zip
+    data = affair_reader.parse(downdir=tmp_dir, filename=zip_filename)
+    out_rows = []
+    for code in data.index:
+        row = data.loc[code]
+        if isinstance(row, pd.DataFrame):
+            row = row.iloc[0]
+        outstanding = None
+        val = row.get('已上市流通A股')
+        if '已上市流通A股' in data.columns and pd.notna(val):
+            outstanding = val
+        else:
+            val = row.get('自由流通股(股)')
+            if '自由流通股(股)' in data.columns and pd.notna(val):
+                outstanding = val
+            else:
+                val = row.get('总股本')
+                if '总股本' in data.columns and pd.notna(val):
+                    outstanding = val
+        if outstanding is not None:
+            out_rows.append({'code': str(code).zfill(6), 'outstanding': outstanding})
+    df_out = pd.DataFrame(out_rows)
+    if df_out.empty:
+        raise RuntimeError("未能获取任何流通股本数据，请检查通达信财务数据文件内容或字段名。")
+    df_out['code'] = df_out['code'].astype(str).str.zfill(6)
+    df_out.to_csv(csv_path, index=False, quoting=csv.QUOTE_ALL)
+    return dict(zip(df_out['code'], df_out['outstanding']))
+
+# ========== mootdx本地流通股本批量抓取（Affair方式） ==========
+def get_outstanding_map_tdx(csv_path='outstanding_map.csv', tdx_path=CONFIG['tdx_path']):
+    """
+    优先用本地通达信财务数据批量提取流通股本，保存为csv，后续直接读取。
+    :param csv_path: 本地缓存文件路径
+    :param tdx_path: 通达信目录
+    :return: symbol->outstanding字典（单位：股）
+    """
+    if os.path.exists(csv_path):
+        df_out = pd.read_csv(csv_path, dtype={'code': str})
+        # 兼容老字段名
+        if 'symbol' in df_out.columns and 'outstanding' in df_out.columns:
+            return dict(zip(df_out['symbol'], df_out['outstanding']))
+        elif 'code' in df_out.columns and 'outstanding' in df_out.columns:
+            return dict(zip(df_out['code'], df_out['outstanding']))
+        else:
+            print(f"警告：{csv_path} 文件格式异常，将重新生成。")
+            os.remove(csv_path)
+    # 用新函数生成
+    return get_outstanding_map_from_tdx(tdx_path=tdx_path, csv_path=csv_path)
+
+
+# ========== 在calculate_features中集成真实流通股本 ==========
+# 全局加载一次outstanding_map（优先用本地通达信）
+OUTSTANDING_MAP = get_outstanding_map_from_tdx(
+    tdx_path=CONFIG['tdx_path'],
+    csv_path='outstanding_map.csv',
+    zip_filename='gpcw20250331.zip'
+)
+
 def get_local_data(symbol, days=CONFIG['data_days']):
     """
-    获取本地日线数据（只用daily_data做特征工程，避免多列close冲突）
+    获取本地日线数据，保证date列为字符串格式
     """
     try:
         reader = Reader.factory(market='std', tdxdir=CONFIG['tdx_path'])
-        # 获取日线数据
         daily_data = reader.daily(symbol=symbol)
         if daily_data is None or len(daily_data) < days:
             return None
+        # 补齐date字段
+        if 'date' not in daily_data.columns:
+            # mootdx 0.9.7+ 会自动有date字段，老版本没有
+            # 尝试用index补齐
+            if hasattr(daily_data.index, 'to_timestamp') or isinstance(daily_data.index, pd.DatetimeIndex):
+                daily_data = daily_data.copy()
+                daily_data['date'] = daily_data.index.strftime('%Y%m%d')
+            else:
+                # 兜底：用range生成假日期（不推荐，建议升级mootdx）
+                daily_data = daily_data.copy()
+                daily_data['date'] = pd.Series(
+                    pd.date_range(end=pd.Timestamp.today(), periods=len(daily_data))
+                ).dt.strftime('%Y%m%d').values
+        else:
+            daily_data['date'] = daily_data['date'].dt.strftime('%Y%m%d')
+        print(f"{symbol} 数据行数: {len(daily_data)}, 列: {list(daily_data.columns)}")
         return daily_data.tail(days)
     except Exception as e:
         logger.error(f"获取{symbol}数据失败: {str(e)}")
         return None
 
-def calculate_features(df):
-    """
-    计算技术指标特征[6,9](@ref)
-    包含竞价特征和技术指标
-    """
+def get_auction_features(symbol, date, tdx_path=CONFIG['tdx_path']):
+    reader = Reader.factory(market='std', tdxdir=tdx_path)
     try:
-        # 基础价格特征
-        df['ret_1d'] = df['close'].pct_change()
-        df['volatility_5d'] = df['close'].pct_change().rolling(5).std()
-        
-        # 均线系统
-        df['MA_5'] = talib.MA(df['close'], timeperiod=5)
-        df['MA_10'] = talib.MA(df['close'], timeperiod=10)
-        df['MA_20'] = talib.MA(df['close'], timeperiod=20)
-        
-        # MACD指标
+        df_min = reader.minute(symbol=symbol)
+    except Exception:
+        df_min = None
+    auction_features = {}
+    if df_min is not None and not df_min.empty and 'date' in df_min.columns:
+        # 保证date为int类型
+        df_min = df_min.copy()
+        df_min['date'] = df_min['date'].astype(int)
+        df_min = df_min[df_min['date'] == int(date)]
+        df_min['time_str'] = df_min['time'].astype(str).str.zfill(4)
+        df_auction = df_min[df_min['time_str'].between('0920', '0925')]
+        auction_features['auction_volume'] = df_auction['volume'].sum()
+        auction_features['auction_amount'] = df_auction['amount'].sum()
+        auction_features['auction_avg_price'] = (df_auction['amount'].sum() / df_auction['volume'].sum()
+                                                 if df_auction['volume'].sum() > 0 else np.nan)
+    else:
+        auction_features['auction_volume'] = np.nan
+        auction_features['auction_amount'] = np.nan
+        auction_features['auction_avg_price'] = np.nan
+    # 分笔特征本地没有，直接填NaN
+    auction_features['tick_auction_volume'] = np.nan
+    auction_features['tick_auction_amount'] = np.nan
+    auction_features['tick_auction_avg_price'] = np.nan
+    return auction_features
+
+def calculate_features(df, symbol=None):
+    try:
+        if 'date' not in df.columns:
+            raise ValueError("输入数据缺少 date 字段")
+        df = df.copy()
+        df['date'] = df['date'].astype(str)
+        result = pd.DataFrame()
+        result['date'] = df['date']
+        # result['ret_1d'] = df['close'].pct_change()  # 移除1日收益率因子
+        result['volatility_5d'] = df['close'].pct_change().rolling(5).std()
+        result['MA_5'] = talib.MA(df['close'], timeperiod=5)
+        result['MA_10'] = talib.MA(df['close'], timeperiod=10)
+        result['MA_20'] = talib.MA(df['close'], timeperiod=20)
         macd, macdsignal, _ = talib.MACD(df['close'])
-        df['MACD'] = macd
-        df['MACD_Signal'] = macdsignal
-        
-        # RSI指标
-        df['RSI_14'] = talib.RSI(df['close'], timeperiod=14)
-        
-        # 竞价特征部分：
-        if 'pre_open' in df.columns:
-            df['pre_open_change'] = (df['pre_open'] - df['close'].shift(1)) / df['close'].shift(1)
-            df['pre_volume_ratio'] = df['pre_volume'] / df['volume'].rolling(5).mean()
-        # 目标变量：当天是否涨停（创业板20%）
-        df['target'] = (df['close'] / df['close'].shift(1) >= 1.20).astype(int)
-        
-        return df.dropna()
+        result['MACD'] = macd
+        result['MACD_Signal'] = macdsignal
+        result['RSI_14'] = talib.RSI(df['close'], timeperiod=14)
+        # 目标变量
+        result['target'] = (df['close'] / df['close'].shift(1) >= 1.10).astype(int)
+        # 自动合并分时/分笔特征
+        if symbol is not None:
+            auction_feature_dicts = []
+            for date in result['date']:
+                feats = get_auction_features(symbol, date)
+                auction_feature_dicts.append(feats)
+            auction_df = pd.DataFrame(auction_feature_dicts)
+            auction_df.index = result.index
+            result = pd.concat([result, auction_df], axis=1)
+        # 换手率 = 当日成交量 / 流通股本（如有outstanding字段）
+        if 'outstanding' not in df.columns and symbol is not None:
+            code6 = symbol[2:] if symbol.startswith(('sh', 'sz')) else symbol
+            df['outstanding'] = OUTSTANDING_MAP.get(code6, np.nan)
+        if 'outstanding' in df.columns:
+            result['turnover_rate'] = df['volume'] / df['outstanding']
+        else:
+            result['turnover_rate'] = None  # 或np.nan
+        # 量比 = 当日成交量 / (前5日平均成交量/240)
+        if len(df) > 5:
+            avg_5d_vol = df['volume'].iloc[-6:-1].mean()
+            result['volume_ratio'] = df['volume'] / (avg_5d_vol / 240)
+        else:
+            result['volume_ratio'] = None  # 或np.nan
+        # DDE大单净量 = （大单买入量 - 大单卖出量）/ 流通股本 × 100%
+        # 用1分钟线近似tick，使用mootdx的minute方法
+        result['dde_net_large_order_volume'] = None  # 默认无分钟线
+        try:
+            if symbol is not None:
+                minute_reader = Reader.factory(market='std', tdxdir=CONFIG['tdx_path'])
+                min1_df = minute_reader.minute(symbol=symbol)
+                if min1_df is not None and not min1_df.empty:
+                    logging.debug(f"{symbol} 分钟线字段: {min1_df.columns}")
+                    logging.debug(f"{symbol} 分钟线 index: {min1_df.index}")
+                    logging.debug(f"{symbol} 分钟线 index type: {type(min1_df.index)}")
+                    last_date = df['date'].iloc[-1]
+                    # 兼容index为DatetimeIndex、date、datetime字段
+                    if isinstance(min1_df.index, pd.DatetimeIndex):
+                        min1_df['date'] = min1_df.index.strftime('%Y%m%d').astype(int)
+                        min1_df = min1_df[min1_df['date'] == int(last_date)]
+                    elif 'date' in min1_df.columns:
+                        if min1_df['date'].dtype != int:
+                            min1_df['date'] = min1_df['date'].astype(int)
+                        min1_df = min1_df[min1_df['date'] == int(last_date)]
+                    elif 'datetime' in min1_df.columns:
+                        min1_df['date'] = min1_df['datetime'].astype(str).str[:8].astype(int)
+                        min1_df = min1_df[min1_df['date'] == int(last_date)]
+                    else:
+                        logging.debug(f"{symbol} 分钟线数据无date或datetime字段，无法筛选当日")
+                        min1_df = None
+                    if min1_df is not None and not min1_df.empty:
+                        # 近似tick：大单=单分钟成交量>=100000
+                        large_orders = min1_df[min1_df['volume'] >= 100000]
+                        buy_vol = large_orders[large_orders['close'] > large_orders['open']]['volume'].sum()
+                        sell_vol = large_orders[large_orders['close'] < large_orders['open']]['volume'].sum()
+                        logging.debug(f"{symbol} {last_date} 大单买入量: {buy_vol}, 大单卖出量: {sell_vol}, 大单总数: {len(large_orders)}")
+                        if 'outstanding' in df.columns and df['outstanding'].iloc[-1] > 0:
+                            result['dde_net_large_order_volume'] = (buy_vol - sell_vol) / df['outstanding'].iloc[-1] * 100
+                        else:
+                            logging.debug(f"{symbol} 缺少流通股本字段，无法计算DDE大单净量")
+                    else:
+                        logging.debug(f"{symbol} 无法读取分钟线数据或数据为空")
+        except Exception as e:
+            logging.warning(f"{symbol} 计算DDE大单净量异常: {e}")
+        # 筹码集中度因子
+        result['chip_bottom_ratio_20d'] = df['close'].rolling(20).apply(
+            lambda x: get_chip_ratio(pd.DataFrame({'close': x}), price_range=(0, 0.3), days=20), raw=False)
+        result['chip_top_ratio_20d'] = df['close'].rolling(20).apply(
+            lambda x: get_chip_ratio(pd.DataFrame({'close': x}), price_range=(0.7, 1), days=20), raw=False)
+        result['chip_stability_20d'] = df['close'].rolling(20).apply(
+            lambda x: chip_stability(pd.DataFrame({'close': x}), days=20), raw=False)
+        # 输出调试日志
+        try:
+            last_idx = result.index[-1]
+            feature_log = {col: result.loc[last_idx, col] for col in result.columns if col != 'date'}
+            logging.info(f"{symbol} 所有特征最后一行: {feature_log}")
+        except Exception as e:
+            logging.warning(f"{symbol} 特征日志输出异常: {e}")
+        # 注意：如有特征变动，需删除旧模型文件并重新训练模型，保证特征数一致。
+        return result.dropna(subset=['target'])
     except Exception as e:
         logger.error(f"特征计算失败: {str(e)}")
         return None
 
 def prepare_dataset(stock_list):
-    """
-    遍历股票池，读取本地日线数据，计算特征，拼接训练集。
-    - 对每只股票，先用get_local_data(symbol)读取日线数据
-    - 用calculate_features(data)计算技术指标和目标变量
-    - 丢弃无数据或特征为空的股票
-    - 拼接所有股票的特征和标签到X、y
-    - 用StandardScaler做归一化
-    - 返回归一化特征、标签和scaler
-    """
     X, y = [], []
-    
-    for symbol in stock_list:  # 遍历所有股票
+    all_feature_names = set()
+    features_list = []
+    for symbol in stock_list:
         data = get_local_data(symbol)
         if data is None:
             print(f"{symbol} 无本地数据")
             continue
-        data_with_features = calculate_features(data)
+        data_with_features = calculate_features(data, symbol=symbol)
         if data_with_features is None or data_with_features.empty:
             print(f"{symbol} 特征为空")
             continue
-        # 排除目标列
-        features = data_with_features.drop(['target'], axis=1).values
-        targets = data_with_features['target'].values
-        X.extend(features)
-        y.extend(targets)
-        # logger.info(f"处理完成: {symbol}")
+        features = data_with_features.drop(['target'], axis=1)
+        all_feature_names.update(features.columns)
+        features_list.append((features, data_with_features['target']))
+    all_feature_names = sorted(all_feature_names)
+    for features, targets in features_list:
+        features = features.reindex(columns=all_feature_names, fill_value=np.nan)
+        X.extend(features.values)
+        y.extend(targets.values)
     print(f"最终特征样本数: {len(X)}")
-    # 数据标准化
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
-    return X_scaled, np.array(y), scaler
+    return X_scaled, np.array(y), scaler, all_feature_names
 
 def train_xgboost(X_train, y_train, X_val, y_val):
     """
@@ -245,32 +438,20 @@ def load_models():
     return xgb_model, lgb_model, scaler
 
 def daily_selection(models, scaler):
-    """每日竞价选股[3,5](@ref)"""
     today = datetime.now().strftime("%Y-%m-%d")
     selected_stocks = []
     stock_list = get_stock_list()
-    
     for symbol in stock_list:
         data = get_local_data(symbol)
         if data is None or len(data) < 5:
             continue
-        
-        # 计算特征
-        latest_data = calculate_features(data).iloc[-1:].drop(['target'], axis=1)
+        latest_data = calculate_features(data, symbol=symbol).iloc[-1:].drop(['target'], axis=1)
         if latest_data.empty:
             continue
-        
-        # 数据标准化
         X_scaled = scaler.transform(latest_data.values)
-        
-        # 模型预测
         xgb_proba = models[0].predict_proba(X_scaled)[0][1]
         lgb_proba = models[1].predict(X_scaled)[0]
-        
-        # 加权融合预测概率[14](@ref)
-        fused_proba = (CONFIG['fusion_weights'][0] * xgb_proba + 
-                       CONFIG['fusion_weights'][1] * lgb_proba)
-        
+        fused_proba = (CONFIG['fusion_weights'][0] * xgb_proba + CONFIG['fusion_weights'][1] * lgb_proba)
         selected_stocks.append({
             'symbol': symbol,
             'probability': fused_proba,
@@ -278,8 +459,6 @@ def daily_selection(models, scaler):
             'last_close': data.iloc[-2]['close'],
             'pre_change': (data.iloc[-1]['open'] / data.iloc[-2]['close'] - 1) * 100
         })
-    
-    # 按概率排序取前N
     selected_stocks.sort(key=lambda x: x['probability'], reverse=True)
     return selected_stocks[:CONFIG['top_n']]
 
@@ -323,6 +502,56 @@ def plot_and_save_feature_importance(model, feature_names, model_type, filename)
     plt.close()
     logger.info(f"{model_type.upper()}特征重要性已保存到 {filename}")
 
+def backtest_selection(models, scaler, date_str):
+    selected_stocks = []
+    stock_list = get_stock_list()
+    for symbol in stock_list:
+        data = get_local_data(symbol)
+        if data is None or len(data) < 5:
+            continue
+        features_df = calculate_features(data, symbol=symbol)
+        if features_df is None or features_df.empty or 'date' not in features_df.columns:
+            print(f"{symbol} 特征无date列，跳过")
+            continue
+        row = features_df[features_df['date'] == date_str]
+        if row.empty:
+            continue
+        latest_data = row.drop(['target', 'date'], axis=1)
+        X_scaled = scaler.transform(latest_data.values)
+        xgb_proba = models[0].predict_proba(X_scaled)[0][1]
+        lgb_proba = models[1].predict(X_scaled)[0]
+        fused_proba = (CONFIG['fusion_weights'][0] * xgb_proba + CONFIG['fusion_weights'][1] * lgb_proba)
+        prev_close = None
+        if not data.loc[data['date'] < date_str].empty:
+            prev_close = data.loc[data['date'] < date_str, 'close'].iloc[-1]
+        pre_open = row.iloc[0].get('pre_open', None)
+        selected_stocks.append({
+            'symbol': symbol,
+            'probability': fused_proba,
+            'pre_open': pre_open,
+            'last_close': prev_close,
+            'pre_change': ((pre_open or 0) / (prev_close if prev_close else 1) - 1) * 100 if pre_open is not None and prev_close else None
+        })
+    selected_stocks.sort(key=lambda x: x['probability'], reverse=True)
+    return selected_stocks[:CONFIG['top_n']]
+
+def get_chip_ratio(df, price_range=(0, 0.3), days=20):
+    if len(df) < days:
+        return np.nan
+    closes = df['close'].tail(days)
+    min_p = closes.min()
+    max_p = closes.max()
+    if max_p == min_p:
+        return 1.0
+    normed = (closes - min_p) / (max_p - min_p)
+    ratio = ((normed >= price_range[0]) & (normed <= price_range[1])).sum() / days
+    return ratio
+
+def chip_stability(df, days=20):
+    bottom_ratio = get_chip_ratio(df, price_range=(0, 0.3), days=days)
+    current_ratio = get_chip_ratio(df, price_range=(0.7, 1), days=days)
+    return int(bottom_ratio > 0.65 and current_ratio < 0.21)
+
 def main():
     """
     主程序流程：
@@ -339,18 +568,12 @@ def main():
         logger.info("加载预训练模型")
         xgb_model, lgb_model, scaler = load_models()
         models = (xgb_model, lgb_model)
-        # 由于特征名未保存，尝试从train_features.csv读取
         feature_df = pd.read_csv('train_features.csv')
         feature_names = feature_df.columns[:-1]  # 最后一列是label
     else:
         logger.info("训练新模型")
         stock_list = get_stock_list()
-        X, y, scaler = prepare_dataset(stock_list)
-        # 保存特征数据到csv，保留真实特征名
-        sample_symbol = stock_list[0]
-        sample_data = get_local_data(sample_symbol)
-        sample_features = calculate_features(sample_data)
-        feature_columns = sample_features.drop(['target'], axis=1).columns
+        X, y, scaler, feature_columns = prepare_dataset(stock_list)
         feature_df = pd.DataFrame(X, columns=feature_columns)
         feature_df['label'] = y
         feature_df.to_csv('train_features.csv', index=False)
@@ -387,4 +610,14 @@ def main():
     save_results(selected_stocks)
 
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) > 1:
+        # 回测模式
+        date_str = sys.argv[1]
+        logger.info(f"历史回测，指定日期：{date_str}")
+        xgb_model, lgb_model, scaler = load_models()
+        models = (xgb_model, lgb_model)
+        selected_stocks = backtest_selection(models, scaler, date_str)
+        save_results(selected_stocks, filename=f"backtest_selected_{date_str}.csv")
+    else:
+        main()
