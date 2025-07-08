@@ -9,8 +9,8 @@
 #使用方法：需要自己下载通达信的数据后再运行。
 # 1. 盘后数据下载：选项->盘后数据下载->日线数据->勾选日线和实时行情数据->开始下载；
 # 2. 概念导出：选项->数据导出->板块成分导出->选择导出文件夹->开始导出；
-# 3. 将导出的文件放在dingtalk_subjob/tdx_bankuai目录下，目前只放：概念板块.txt和行业板块.txt;
-# 3. 运行脚本：python3 -m dingtalk_subjob.tdx_bankuaifenxi
+# 3. 将导出的文件放在 tdx_rps_subjob/tdx_bankuaigainian目录下，目前只放：概念板块.txt和行业板块.txt;
+# 3. 运行脚本：python3 -m tdx_rps_subjob.tdx_bankuaifenxi
 
 
 import pandas as pd
@@ -29,7 +29,7 @@ CONFIG = {
     'days': 60  # 分析天数（最近一年）
 }
 
-def load_plate_name_mapping(bankuai_dir='dingtalk_subjob/tdx_bankuai'):
+def load_plate_name_mapping(bankuai_dir='tdx_rps_subjob/tdx_bankuaigainian'):
     """
     读取tdx_bankuai目录下所有txt/csv文件，建立板块代码到中文名的映射dict。
     支持文件格式：每行以逗号、制表符或空格分隔，前两列分别为代码和名称。
@@ -76,7 +76,7 @@ def get_plate_indices():
     tdx_path = CONFIG['tdx_path']
     code_set = set()
     # 加载板块名称映射
-    name_mapping = load_plate_name_mapping('dingtalk_subjob/tdx_bankuai')
+    name_mapping = load_plate_name_mapping('tdx_rps_subjob/tdx_bankuaigainian')
     for market in ['sh', 'sz']:
         lday_dir = os.path.join(tdx_path, f'vipdoc/{market}/lday')
         if not os.path.exists(lday_dir):
@@ -234,7 +234,7 @@ def run_plate_analysis():
     return all_changes, top_10_results, top_10_results_pct
 
 def analyze_plate_results(all_changes, top_10_results, top_10_results_pct):
-    """对有中文名的概念板块，计算5/10/20/60日涨幅和RPS并保存到同一个表格"""
+    """对有中文名的概念板块，计算5/10/20/60日涨幅和RPS并保存到同一个表格，并提示rps20>rps60的板块"""
     print("开始分析有中文名的概念板块多周期涨幅...")
     if all_changes is None or all_changes.empty:
         print("无有效数据，跳过分析")
@@ -280,6 +280,15 @@ def analyze_plate_results(all_changes, top_10_results, top_10_results_pct):
     result_df = result_df.sort_values('5日涨幅', ascending=False)
     result_df.to_csv('concept_plate_multi_period_change.csv', index=False, encoding='utf-8-sig')
     print("多周期概念板块涨幅和RPS已保存到 concept_plate_multi_period_change.csv")
+    # 检查rps20>rps60的板块
+    for _, row in result_df.iterrows():
+        try:
+            rps20 = float(row['rps20']) if row['rps20'] != '' else None
+            rps60 = float(row['rps60']) if row['rps60'] != '' else None
+            if rps20 is not None and rps60 is not None and rps20 > rps60:
+                print(f"提示：{row['code']} {row['name']} rps20({rps20}) > rps60({rps60})")
+        except Exception as e:
+            continue
 
 def main():
     """主程序"""
