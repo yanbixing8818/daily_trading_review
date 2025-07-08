@@ -26,7 +26,7 @@ CONFIG = {
     'tdx_path': '/mnt/c/new_tdx',  # 通达信安装路径
     'output_file': 'top_plate_indices.csv',  # 输出文件名
     'plate_prefixes': ['880', '885', '886', '887', '399'],  # 板块指数前缀
-    'days': 60  # 分析天数（最近一年）
+    'days': 61  # 分析天数（最近一年）
 }
 
 def load_plate_name_mapping(bankuai_dir='tdx_rps_subjob/tdx_bankuaigainian'):
@@ -147,17 +147,27 @@ def calculate_both_changes(reader, plate_indices):
             daily_data['pct_change'] = daily_data['close'].pct_change() * 100
             daily_data['symbol'] = symbol
             daily_data['name'] = name
+            # 不再强制 daily_data['date'] = daily_data.index
             debug_df = daily_data[['symbol', 'name', 'open', 'close', 'change', 'pct_change']].copy()
             debug_df['date'] = daily_data.index
             debug_rows.append(debug_df)
-            results.append(daily_data[['symbol', 'name', 'change', 'pct_change']])
+            # 结果输出时，date直接用index或已有date列，且都reset_index(drop=True)
+            if 'date' in daily_data.columns:
+                tmp = daily_data[['symbol', 'name', 'date', 'close', 'change', 'pct_change']].copy()
+                tmp = tmp.reset_index(drop=True)
+                results.append(tmp)
+            else:
+                tmp = daily_data[['symbol', 'name', 'close', 'change', 'pct_change']].copy()
+                tmp['date'] = daily_data.index
+                tmp = tmp.reset_index(drop=True)
+                results.append(tmp)
         except Exception as e:
             print(f"处理{symbol}({name})失败: {str(e)}")
     # 保存所有调试信息到csv
     if debug_rows:
         debug_all = pd.concat(debug_rows)
-        debug_all.to_csv('debug_plate_both_changes.csv', index=False, encoding='utf-8-sig')
-        print('已保存中间过程到 debug_plate_both_changes.csv')
+        debug_all.to_csv(os.path.join('tdx_rps_subjob', 'debug_plate_both_changes.csv'), index=False, encoding='utf-8-sig')
+        print('已保存中间过程到 tdx_rps_subjob/debug_plate_both_changes.csv')
     if not results:
         return pd.DataFrame()
     return pd.concat(results)
@@ -180,15 +190,20 @@ def get_top_10_daily_changes(all_changes, change_col='change'):
     return pd.DataFrame(formatted_results)
 
 def save_to_csv(results_df, output_file):
-    """保存结果到指定CSV文件，按日期降序（最近日期在最上面）"""
+    """保存结果到指定CSV文件，按日期降序（最近日期在最上面），除all_plate_rpsN外都放tdx_rps_subjob下"""
+    # 如果是all_plate_rpsN.csv，保持原路径
+    if output_file.startswith('all_plate_rps'):
+        out_path = os.path.join('tdx_rps_subjob', output_file)
+    else:
+        out_path = os.path.join('tdx_rps_subjob', os.path.basename(output_file))
     if 'date' in results_df.columns:
         results_df = results_df.sort_values('date', ascending=False)
-    output_dir = os.path.dirname(output_file)
+    output_dir = os.path.dirname(out_path)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
-    if os.path.exists(output_file):
+    if os.path.exists(out_path):
         results_df.to_csv(
-            output_file,
+            out_path,
             mode='a',
             header=False,
             index=False,
@@ -196,11 +211,11 @@ def save_to_csv(results_df, output_file):
         )
     else:
         results_df.to_csv(
-            output_file,
+            out_path,
             index=False,
             encoding='utf-8-sig'
         )
-    print(f"结果已保存到 {output_file}")
+    print(f"结果已保存到 {out_path}")
 
 def run_plate_analysis():
     """执行板块指数涨幅分析主流程，保存结果到csv"""
@@ -233,8 +248,47 @@ def run_plate_analysis():
     print("板块指数涨幅分析结果已保存")
     return all_changes, top_10_results, top_10_results_pct
 
+def calc_plate_rps(df, code, date, N, name_map=None, save_dir=None):
+    """
+    计算指定板块在指定日期的N日RPS（横向归一化排名）。
+    参数:
+        df: DataFrame，包含所有板块的['code', 'name', 'date', 'close']等数据
+        code: 板块代码（如 'sh880812'）
+        date: 基准日期（如 '2024-06-12'，可为str或datetime/date）
+        N: 周期（如5/10/20/60）
+        name_map: 可选，板块代码到中文名的映射dict
+        save_dir: 可选，若指定则保存csv到该目录
+    返回:
+        rps_df: DataFrame，含['code', 'name', 'date', f'change_{N}', f'rps{N}']
+    """
+    df = df.copy()
+    df['date'] = pd.to_datetime(df['date'])
+    date = pd.to_datetime(date)
+    # 只保留基准日期及N日前的所有数据
+    date_range = df[(df['date'] <= date) & (df['date'] > date - pd.Timedelta(days=N*3))]
+    date_range = date_range.sort_values(['code', 'date'])
+    date_range[f'close_N_days_ago'] = date_range.groupby('code')['close'].shift(N-1)
+    date_range[f'change_{N}'] = (date_range['close'] / date_range[f'close_N_days_ago'] - 1) * 100
+    today_df = date_range[date_range['date'] == date].copy()
+    today_df = today_df.dropna(subset=[f'change_{N}'])
+    today_df = today_df.sort_values(f'change_{N}', ascending=False).reset_index(drop=True)
+    total = len(today_df)
+    if total > 1:
+        today_df[f'rps{N}'] = ((total - today_df.index - 1) / (total - 1) * 100).round(2)
+    else:
+        today_df[f'rps{N}'] = 100.0
+    result = today_df[today_df['code'] == code][['code', 'name', 'date', f'change_{N}', f'rps{N}']]
+    if save_dir is not None and not result.empty:
+        os.makedirs(save_dir, exist_ok=True)
+        name = result['name'].iloc[0] if 'name' in result.columns else name_map.get(code, code) if name_map else code
+        safe_name = str(name).replace('/', '_').replace('\\', '_').replace(' ', '_')
+        fname = f"{code}_{safe_name}_rps{N}.csv"
+        out_path = os.path.join(save_dir, fname)
+        result.to_csv(out_path, index=False, encoding='utf-8-sig')
+    return result
+
 def analyze_plate_results(all_changes, top_10_results, top_10_results_pct):
-    """对有中文名的概念板块，计算5/10/20/60日涨幅和RPS并保存到同一个表格，并提示rps20>rps60的板块"""
+    """对有中文名的概念板块，批量计算5/10/20/60日涨幅和RPS（横向归一化排名），每个周期输出一个csv。"""
     print("开始分析有中文名的概念板块多周期涨幅...")
     if all_changes is None or all_changes.empty:
         print("无有效数据，跳过分析")
@@ -243,52 +297,31 @@ def analyze_plate_results(all_changes, top_10_results, top_10_results_pct):
     df = all_changes.copy()
     df = df[df['symbol'].str[2:5] == '880']  # symbol如sh880568
     df = df[df['name'] != df['symbol']]     # 有中文名
-    # 计算多周期涨幅
-    result_rows = []
-    rps_rows = []
-    for symbol, group in df.groupby('symbol'):
-        name = group['name'].iloc[0]
-        group_sorted = group.sort_index(ascending=False)  # 最近日期在前
-        change_5 = group_sorted['change'].head(5).mean() if len(group_sorted) >= 5 else None
-        change_10 = group_sorted['change'].head(10).mean() if len(group_sorted) >= 10 else None
-        change_20 = group_sorted['change'].head(20).mean() if len(group_sorted) >= 20 else None
-        change_60 = group_sorted['change'].head(60).mean() if len(group_sorted) >= 60 else None
-        result_rows.append({
-            'code': symbol,
-            'name': name,
-            '5日涨幅': round(change_5, 2) if change_5 is not None else '',
-            '10日涨幅': round(change_10, 2) if change_10 is not None else '',
-            '20日涨幅': round(change_20, 2) if change_20 is not None else '',
-            '60日涨幅': round(change_60, 2) if change_60 is not None else ''
-        })
-        rps_rows.append({'code': symbol, 'chg5': change_5, 'chg10': change_10, 'chg20': change_20, 'chg60': change_60})
-    # 计算RPS归一化排名
-    rps_df = pd.DataFrame(rps_rows)
-    for n, col in zip([5, 10, 20, 60], ['chg5', 'chg10', 'chg20', 'chg60']):
-        valid = rps_df[col].notna()
-        df_sort = rps_df[valid].sort_values(col, ascending=False).reset_index(drop=True)
-        total = len(df_sort)
-        rank_col = f'rps{n}'
-        if total > 1:
-            df_sort[rank_col] = ((total - df_sort.index - 1) / (total - 1) * 100).round(2)
-        else:
-            df_sort[rank_col] = 100.0
-        rps_df = rps_df.merge(df_sort[['code', rank_col]], on='code', how='left')
-    # 合并涨幅和RPS
-    result_df = pd.DataFrame(result_rows)
-    result_df = result_df.merge(rps_df[['code', 'rps5', 'rps10', 'rps20', 'rps60']], on='code', how='left')
-    result_df = result_df.sort_values('5日涨幅', ascending=False)
-    result_df.to_csv('concept_plate_multi_period_change.csv', index=False, encoding='utf-8-sig')
-    print("多周期概念板块涨幅和RPS已保存到 concept_plate_multi_period_change.csv")
-    # 检查rps20>rps60的板块
-    for _, row in result_df.iterrows():
-        try:
-            rps20 = float(row['rps20']) if row['rps20'] != '' else None
-            rps60 = float(row['rps60']) if row['rps60'] != '' else None
-            if rps20 is not None and rps60 is not None and rps20 > rps60:
-                print(f"提示：{row['code']} {row['name']} rps20({rps20}) > rps60({rps60})")
-        except Exception as e:
-            continue
+    df = df.rename(columns={'symbol': 'code'})
+    if 'close' not in df.columns:
+        print('警告：数据缺少close列，无法计算RPS')
+        return
+    output_dir = 'tdx_rps_subjob/bankuai_rps'
+    os.makedirs(output_dir, exist_ok=True)
+    # 批量计算所有板块所有日期的N日涨幅和RPS，并输出到csv
+    for N in [5, 10, 20, 60]:
+        df = df.sort_values(['code', 'date'])
+        df[f'close_N_days_ago'] = df.groupby('code')['close'].shift(N-1)
+        df[f'change_{N}'] = (df['close'] / df[f'close_N_days_ago'] - 1) * 100
+        # 横向归一化排名
+        df[f'rps{N}_rank'] = df.groupby('date')[f'change_{N}'].rank(method='min', ascending=False)
+        total = df.groupby('date')[f'change_{N}'].transform('count')
+        df[f'rps{N}'] = ((total - df[f'rps{N}_rank']) / (total - 1) * 100).round(2)
+        out = df[['code', 'name', 'date', f'change_{N}', f'rps{N}']].dropna()
+        out.to_csv(os.path.join(output_dir, f'all_plate_rps{N}.csv'), index=False, encoding='utf-8-sig')
+        print(f"已保存所有板块{N}日RPS到 {output_dir}/all_plate_rps{N}.csv")
+    # 合并表（最新一日的多周期涨幅和RPS）
+    latest_date = df['date'].max()
+    latest_df = df[df['date'] == latest_date].copy()
+    result_df = latest_df[['code', 'name', 'change_5', 'change_10', 'change_20', 'change_60', 'rps5', 'rps10', 'rps20', 'rps60']]
+    result_df = result_df.sort_values('change_5', ascending=False)
+    result_df.to_csv(os.path.join('tdx_rps_subjob', 'concept_plate_multi_period_change.csv'), index=False, encoding='utf-8-sig')
+    print("多周期概念板块涨幅和RPS已保存到 tdx_rps_subjob/concept_plate_multi_period_change.csv")
 
 def main():
     """主程序"""
