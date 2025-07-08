@@ -18,6 +18,8 @@ import matplotlib
 import baostock as bs
 from mootdx.affair import Affair
 import csv
+from sklearn.impute import SimpleImputer
+import pickle
 
 matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
 matplotlib.rcParams['axes.unicode_minus'] = False
@@ -358,27 +360,49 @@ def calculate_features(df, symbol=None):
         return None
 
 def prepare_dataset(stock_list):
-    X, y = [], []
-    all_feature_names = set()
-    features_list = []
-    for symbol in stock_list:
-        data = get_local_data(symbol)
-        if data is None:
-            print(f"{symbol} 无本地数据")
-            continue
-        data_with_features = calculate_features(data, symbol=symbol)
-        if data_with_features is None or data_with_features.empty:
-            print(f"{symbol} 特征为空")
-            continue
-        features = data_with_features.drop(['target'], axis=1)
-        all_feature_names.update(features.columns)
-        features_list.append((features, data_with_features['target']))
-    all_feature_names = sorted(all_feature_names)
-    for features, targets in features_list:
-        features = features.reindex(columns=all_feature_names, fill_value=np.nan)
-        X.extend(features.values)
-        y.extend(targets.values)
-    print(f"最终特征样本数: {len(X)}")
+    X_cache = 'X_raw.npy'
+    y_cache = 'y_raw.npy'
+    feat_cache = 'feature_names.pkl'
+    if os.path.exists(X_cache) and os.path.exists(y_cache) and os.path.exists(feat_cache):
+        X = np.load(X_cache)
+        y = np.load(y_cache)
+        with open(feat_cache, 'rb') as f:
+            all_feature_names = pickle.load(f)
+        print('已加载本地缓存特征数据')
+    else:
+        X, y = [], []
+        all_feature_names = set()
+        features_list = []
+        for symbol in stock_list:
+            data = get_local_data(symbol)
+            if data is None:
+                print(f"{symbol} 无本地数据")
+                continue
+            data_with_features = calculate_features(data, symbol=symbol)
+            if data_with_features is None or data_with_features.empty:
+                print(f"{symbol} 特征为空")
+                continue
+            features = data_with_features.drop(['target'], axis=1)
+            all_feature_names.update(features.columns)
+            features_list.append((features, data_with_features['target']))
+        all_feature_names = sorted(all_feature_names)
+        for features, targets in features_list:
+            features = features.reindex(columns=all_feature_names, fill_value=np.nan)
+            X.extend(features.values)
+            y.extend(targets.values)
+        print(f"最终特征样本数: {len(X)}")
+        X = np.array(X, dtype=float)
+        np.save(X_cache, X)
+        np.save(y_cache, y)
+        with open(feat_cache, 'wb') as f:
+            pickle.dump(all_feature_names, f)
+        print('特征数据已保存到本地缓存')
+        
+    if np.isinf(X).any():
+        print("特征矩阵X中存在inf，将其替换为nan")
+        X[np.isinf(X)] = np.nan
+    imputer = SimpleImputer(strategy='mean')
+    X = imputer.fit_transform(X)
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     return X_scaled, np.array(y), scaler, all_feature_names
