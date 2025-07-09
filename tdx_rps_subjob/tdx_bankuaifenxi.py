@@ -19,7 +19,7 @@ from mootdx.reader import Reader
 from datetime import datetime, timedelta
 import os
 import glob
-from core.trade_time import stock_trade_date  # 新增导入
+from core.trade_time import stock_trade_date, get_previous_trade_date, is_trade_date  # 新增导入
 import sys
 
 # 配置参数
@@ -27,7 +27,7 @@ CONFIG = {
     'tdx_path': '/mnt/c/new_tdx',  # 通达信安装路径
     'output_file': 'top_plate_indices.csv',  # 输出文件名
     'plate_prefixes': ['880', '885', '886', '887', '399'],  # 板块指数前缀
-    'days': 61  # 分析天数（最近一年）
+    'days': 121  # 分析天数（最近一年）
 }
 
 def load_plate_name_mapping(bankuai_dir='tdx_rps_subjob/tdx_bankuaigainian'):
@@ -248,7 +248,7 @@ def run_plate_analysis():
         return
     return all_changes
 
-def save_plate_rps_snapshot(all_changes, target_date, output_dir='tdx_rps_subjob'):
+def calc_plate_rps(all_changes, target_date, output_dir='tdx_rps_subjob'):
     """按指定日期输出快照csv，文件名带日期。"""
     import pandas as pd, os
     df = all_changes.copy()
@@ -269,7 +269,8 @@ def save_plate_rps_snapshot(all_changes, target_date, output_dir='tdx_rps_subjob
     date = pd.to_datetime(target_date)
     snapshot = df[df['date'] == date][['code', 'name', 'change_5', 'change_10', 'change_20', 'change_60', 'rps5', 'rps10', 'rps20', 'rps60']]
     snapshot = snapshot.sort_values('change_5', ascending=False)
-    out_path = os.path.join(output_dir, f'concept_plate_multi_period_change_{date.strftime("%Y%m%d")}.csv')
+    # 保存到 bankuai_rps_date 目录
+    out_path = os.path.join('tdx_rps_subjob/bankuai_rps_date', f'plate_rps_{date.strftime("%Y%m%d")}.csv')
     snapshot.to_csv(out_path, index=False, encoding='utf-8-sig')
     print(f'多周期概念板块涨幅和RPS已保存到 {out_path}')
 
@@ -281,13 +282,21 @@ def main():
         all_changes = run_plate_analysis()
         if all_changes is not None:
             save_top_10_plates(all_changes)
-            # 命令行参数指定日期，否则用最新日期
-            if len(sys.argv) > 1:
-                target_date = sys.argv[1]
-            else:
-                # 自动取all_changes最大日期
-                target_date = pd.to_datetime(all_changes['date']).max().strftime('%Y-%m-%d')
-            save_plate_rps_snapshot(all_changes, target_date)
+            # 获取今天之前的61个交易日
+            today = datetime.now().date()
+            trade_dates = []
+            cur_date = today
+            for _ in range(CONFIG['days']):
+                # 找到上一个交易日
+                cur_date = get_previous_trade_date(cur_date)
+                trade_dates.append(cur_date)
+            trade_dates = sorted(trade_dates)
+            for d in trade_dates:
+                out_path = os.path.join('tdx_rps_subjob/bankuai_rps_date', f'plate_rps_{d.strftime("%Y%m%d")}.csv')
+                if os.path.exists(out_path):
+                    print(f"{out_path} 已存在，跳过计算")
+                    continue
+                calc_plate_rps(all_changes, d.strftime('%Y-%m-%d'))
         print("程序执行完成")
     except Exception as e:
         print(f"程序执行出错: {str(e)}")
