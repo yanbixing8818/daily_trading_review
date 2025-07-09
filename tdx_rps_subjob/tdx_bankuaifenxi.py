@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 import os
 import glob
 from core.trade_time import stock_trade_date  # 新增导入
+import sys
 
 # 配置参数
 CONFIG = {
@@ -217,8 +218,19 @@ def save_to_csv(results_df, output_file):
         )
     print(f"结果已保存到 {out_path}")
 
+def save_top_10_plates(all_changes):
+    """保存每日涨幅前10名板块到csv（change和pct_change两种方式）"""
+    top_10_results = get_top_10_daily_changes(all_changes, change_col='change')
+    top_10_results_pct = get_top_10_daily_changes(all_changes, change_col='pct_change')
+    if top_10_results.empty or top_10_results_pct.empty:
+        print("未生成有效的排名数据")
+        return
+    save_to_csv(top_10_results, 'top_plate_indices_change.csv')  # 板块的实体涨幅
+    save_to_csv(top_10_results_pct, 'top_plate_indices_pct_change.csv')  # 板块的真正百分比涨幅
+    print("板块指数涨幅分析结果已保存")
+
 def run_plate_analysis():
-    """执行板块指数涨幅分析主流程，保存结果到csv"""
+    """执行板块指数涨幅分析主流程，返回all_changes。"""
     # 初始化通达信读取器
     reader = Reader.factory(market='std', tdxdir=CONFIG['tdx_path'])
     print("通达信读取器初始化成功")
@@ -234,66 +246,11 @@ def run_plate_analysis():
     if all_changes.empty:
         print("未获取到有效的涨幅数据")
         return
-    
-    # 获取每日前10名
-    top_10_results = get_top_10_daily_changes(all_changes, change_col='change')
-    top_10_results_pct = get_top_10_daily_changes(all_changes, change_col='pct_change')
-    if top_10_results.empty or top_10_results_pct.empty:
-        print("未生成有效的排名数据")
-        return
-    
-    # 保存结果到两个不同的csv
-    save_to_csv(top_10_results, 'top_plate_indices_change.csv')  #板块的实体涨幅
-    save_to_csv(top_10_results_pct, 'top_plate_indices_pct_change.csv')  #板块的真正百分比涨幅
-    print("板块指数涨幅分析结果已保存")
-    return all_changes, top_10_results, top_10_results_pct
+    return all_changes
 
-def calc_plate_rps(df, code, date, N, name_map=None, save_dir=None):
-    """
-    计算指定板块在指定日期的N日RPS（横向归一化排名）。
-    参数:
-        df: DataFrame，包含所有板块的['code', 'name', 'date', 'close']等数据
-        code: 板块代码（如 'sh880812'）
-        date: 基准日期（如 '2024-06-12'，可为str或datetime/date）
-        N: 周期（如5/10/20/60）
-        name_map: 可选，板块代码到中文名的映射dict
-        save_dir: 可选，若指定则保存csv到该目录
-    返回:
-        rps_df: DataFrame，含['code', 'name', 'date', f'change_{N}', f'rps{N}']
-    """
-    df = df.copy()
-    df['date'] = pd.to_datetime(df['date'])
-    date = pd.to_datetime(date)
-    # 只保留基准日期及N日前的所有数据
-    date_range = df[(df['date'] <= date) & (df['date'] > date - pd.Timedelta(days=N*3))]
-    date_range = date_range.sort_values(['code', 'date'])
-    date_range[f'close_N_days_ago'] = date_range.groupby('code')['close'].shift(N-1)
-    date_range[f'change_{N}'] = (date_range['close'] / date_range[f'close_N_days_ago'] - 1) * 100
-    today_df = date_range[date_range['date'] == date].copy()
-    today_df = today_df.dropna(subset=[f'change_{N}'])
-    today_df = today_df.sort_values(f'change_{N}', ascending=False).reset_index(drop=True)
-    total = len(today_df)
-    if total > 1:
-        today_df[f'rps{N}'] = ((total - today_df.index - 1) / (total - 1) * 100).round(2)
-    else:
-        today_df[f'rps{N}'] = 100.0
-    result = today_df[today_df['code'] == code][['code', 'name', 'date', f'change_{N}', f'rps{N}']]
-    if save_dir is not None and not result.empty:
-        os.makedirs(save_dir, exist_ok=True)
-        name = result['name'].iloc[0] if 'name' in result.columns else name_map.get(code, code) if name_map else code
-        safe_name = str(name).replace('/', '_').replace('\\', '_').replace(' ', '_')
-        fname = f"{code}_{safe_name}_rps{N}.csv"
-        out_path = os.path.join(save_dir, fname)
-        result.to_csv(out_path, index=False, encoding='utf-8-sig')
-    return result
-
-def analyze_plate_results(all_changes, top_10_results, top_10_results_pct):
-    """对有中文名的概念板块，批量计算5/10/20/60日涨幅和RPS（横向归一化排名），每个周期输出一个csv。"""
-    print("开始分析有中文名的概念板块多周期涨幅...")
-    if all_changes is None or all_changes.empty:
-        print("无有效数据，跳过分析")
-        return
-    # 只保留概念板块（code以880开头）且有中文名
+def save_plate_rps_snapshot(all_changes, target_date, output_dir='tdx_rps_subjob'):
+    """按指定日期输出快照csv，文件名带日期。"""
+    import pandas as pd, os
     df = all_changes.copy()
     df = df[df['symbol'].str[2:5] == '880']  # symbol如sh880568
     df = df[df['name'] != df['symbol']]     # 有中文名
@@ -301,37 +258,36 @@ def analyze_plate_results(all_changes, top_10_results, top_10_results_pct):
     if 'close' not in df.columns:
         print('警告：数据缺少close列，无法计算RPS')
         return
-    output_dir = 'tdx_rps_subjob/bankuai_rps'
-    os.makedirs(output_dir, exist_ok=True)
-    # 批量计算所有板块所有日期的N日涨幅和RPS，并输出到csv
     for N in [5, 10, 20, 60]:
         df = df.sort_values(['code', 'date'])
         df[f'close_N_days_ago'] = df.groupby('code')['close'].shift(N-1)
         df[f'change_{N}'] = (df['close'] / df[f'close_N_days_ago'] - 1) * 100
-        # 横向归一化排名
         df[f'rps{N}_rank'] = df.groupby('date')[f'change_{N}'].rank(method='min', ascending=False)
         total = df.groupby('date')[f'change_{N}'].transform('count')
         df[f'rps{N}'] = ((total - df[f'rps{N}_rank']) / (total - 1) * 100).round(2)
-        out = df[['code', 'name', 'date', f'change_{N}', f'rps{N}']].dropna()
-        out.to_csv(os.path.join(output_dir, f'all_plate_rps{N}.csv'), index=False, encoding='utf-8-sig')
-        print(f"已保存所有板块{N}日RPS到 {output_dir}/all_plate_rps{N}.csv")
-    # 合并表（最新一日的多周期涨幅和RPS）
-    latest_date = df['date'].max()
-    latest_df = df[df['date'] == latest_date].copy()
-    result_df = latest_df[['code', 'name', 'change_5', 'change_10', 'change_20', 'change_60', 'rps5', 'rps10', 'rps20', 'rps60']]
-    result_df = result_df.sort_values('change_5', ascending=False)
-    result_df.to_csv(os.path.join('tdx_rps_subjob', 'concept_plate_multi_period_change.csv'), index=False, encoding='utf-8-sig')
-    print("多周期概念板块涨幅和RPS已保存到 tdx_rps_subjob/concept_plate_multi_period_change.csv")
+    # 只保留目标日期
+    date = pd.to_datetime(target_date)
+    snapshot = df[df['date'] == date][['code', 'name', 'change_5', 'change_10', 'change_20', 'change_60', 'rps5', 'rps10', 'rps20', 'rps60']]
+    snapshot = snapshot.sort_values('change_5', ascending=False)
+    out_path = os.path.join(output_dir, f'concept_plate_multi_period_change_{date.strftime("%Y%m%d")}.csv')
+    snapshot.to_csv(out_path, index=False, encoding='utf-8-sig')
+    print(f'多周期概念板块涨幅和RPS已保存到 {out_path}')
 
 def main():
     """主程序"""
+    import sys
     try:
         # 运行主流程，获取结果
-        result = run_plate_analysis()
-        if result is not None:
-            all_changes, top_10_results, top_10_results_pct = result
-            # 可选：后续分析
-            analyze_plate_results(all_changes, top_10_results, top_10_results_pct)
+        all_changes = run_plate_analysis()
+        if all_changes is not None:
+            save_top_10_plates(all_changes)
+            # 命令行参数指定日期，否则用最新日期
+            if len(sys.argv) > 1:
+                target_date = sys.argv[1]
+            else:
+                # 自动取all_changes最大日期
+                target_date = pd.to_datetime(all_changes['date']).max().strftime('%Y-%m-%d')
+            save_plate_rps_snapshot(all_changes, target_date)
         print("程序执行完成")
     except Exception as e:
         print(f"程序执行出错: {str(e)}")
