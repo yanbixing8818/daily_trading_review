@@ -452,11 +452,12 @@ def main():
             today = datetime.now().date()
             trade_dates = []
             cur_date = today
+            if is_trade_date(today):
+                trade_dates.append(today)
             for _ in range(CONFIG['days']):
-                # 找到上一个交易日
                 cur_date = get_previous_trade_date(cur_date)
                 trade_dates.append(cur_date)
-            trade_dates = sorted(trade_dates)
+            trade_dates = sorted(set(trade_dates))
             for d in trade_dates:
                 out_path = os.path.join('tdx_rps_subjob/bankuai_rps_date', f'plate_rps_{d.strftime("%Y%m%d")}.csv')
                 if os.path.exists(out_path):
