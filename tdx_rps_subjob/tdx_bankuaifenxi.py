@@ -18,6 +18,9 @@ import numpy as np
 from mootdx.reader import Reader
 from datetime import datetime, timedelta
 import os
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import glob
 from core.trade_time import stock_trade_date, get_previous_trade_date, is_trade_date  # 新增导入
 import sys
