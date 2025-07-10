@@ -312,7 +312,39 @@ def check_plate_buy_point1(rps5, pre_rps5, rps10, pre_rps10, rps20, pre_rps20, r
         and (pre_rps20 is not None and rps20 - pre_rps20 > 10)
         and (pre_volume is not None and volume is not None and volume > pre_volume * 1.3)
     )
-    
+
+def check_plate_buy_point2(rps5, pre_rps5, rps10, pre_rps10, rps20, pre_rps20, rps60, pre_rps60, volume, pre_volume, volume_5d_avg):
+    """
+    买点筛选条件：
+    - rps5 > 80
+    - pre_rps5 < 70
+    - rps5 - pre_rps5 > 20
+    - rps10 > 80
+    - rps20 > 80
+    - rps60 > 50
+    - volume > pre_volume * 1.5
+    """
+    try:
+        rps5 = float(rps5)
+        pre_rps5 = float(pre_rps5) if pre_rps5 is not None else None
+        rps10 = float(rps10)
+        rps20 = float(rps20)
+        rps60 = float(rps60)
+        volume = float(volume) if volume is not None else None
+        pre_volume = float(pre_volume) if pre_volume is not None else None
+    except Exception:
+        return False
+    return (
+        rps5 > 80
+        and (pre_rps5 is not None and pre_rps5 < 70)
+        and (pre_rps5 is not None and rps5 - pre_rps5 > 20)
+        and rps10 > 80
+        and rps20 > 80
+        and rps60 > 50
+        and (pre_volume is not None and volume is not None and volume > pre_volume * 1.5)
+    )
+
+
 
 def find_plate_buy_points(snapshot_dir='tdx_rps_subjob/bankuai_rps_date'):
     """
@@ -383,8 +415,8 @@ def find_plate_buy_points(snapshot_dir='tdx_rps_subjob/bankuai_rps_date'):
             volume_5d_avg = item.get('volume_5d_avg', None)
             if check_plate_buy_point1(rps5, pre_rps5, rps10, pre_rps10, rps20, pre_rps20, rps60, pre_rps60, volume, pre_volume, volume_5d_avg):
                 results1.append((item['date'], plate_name_map[code], code))
-            # if check_plate_buy_point2(...):
-            #     results2.append(...)
+            if check_plate_buy_point2(rps5, pre_rps5, rps10, pre_rps10, rps20, pre_rps20, rps60, pre_rps60, volume, pre_volume, volume_5d_avg):
+                results2.append((item['date'], plate_name_map[code], code))
             pre_rps5 = rps5
             pre_rps10 = rps10
             pre_rps20 = rps20
