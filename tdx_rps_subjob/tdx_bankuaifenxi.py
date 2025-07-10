@@ -144,21 +144,28 @@ def calculate_both_changes(reader, plate_indices):
             # print(f"{symbol} 过滤后剩余: {len(daily_data)} 行, 日期: {list(daily_data.index.date)}")
             if len(daily_data) < 2:
                 continue
+            # 保留volume字段
+            if 'volume' not in daily_data.columns:
+                if 'vol' in daily_data.columns:
+                    daily_data['volume'] = daily_data['vol']
+                else:
+                    daily_data['volume'] = np.nan
             daily_data['change'] = (daily_data['close'] - daily_data['open']) / daily_data['open'] * 100
             daily_data['pct_change'] = daily_data['close'].pct_change() * 100
             daily_data['symbol'] = symbol
             daily_data['name'] = name
             # 不再强制 daily_data['date'] = daily_data.index
             debug_df = daily_data[['symbol', 'name', 'open', 'close', 'change', 'pct_change']].copy()
+            debug_df['volume'] = daily_data['volume']
             debug_df['date'] = daily_data.index
             debug_rows.append(debug_df)
             # 结果输出时，date直接用index或已有date列，且都reset_index(drop=True)
             if 'date' in daily_data.columns:
-                tmp = daily_data[['symbol', 'name', 'date', 'close', 'change', 'pct_change']].copy()
+                tmp = daily_data[['symbol', 'name', 'date', 'close', 'change', 'pct_change', 'volume']].copy()
                 tmp = tmp.reset_index(drop=True)
                 results.append(tmp)
             else:
-                tmp = daily_data[['symbol', 'name', 'close', 'change', 'pct_change']].copy()
+                tmp = daily_data[['symbol', 'name', 'close', 'change', 'pct_change', 'volume']].copy()
                 tmp['date'] = daily_data.index
                 tmp = tmp.reset_index(drop=True)
                 results.append(tmp)
@@ -258,6 +265,9 @@ def calc_plate_rps(all_changes, target_date, output_dir='tdx_rps_subjob'):
     if 'close' not in df.columns:
         print('警告：数据缺少close列，无法计算RPS')
         return
+    # 计算5日均量
+    df = df.sort_values(['code', 'date'])
+    df['volume_5d_avg'] = df.groupby('code')['volume'].rolling(5).mean().reset_index(level=0, drop=True)
     for N in [5, 10, 20, 60]:
         df = df.sort_values(['code', 'date'])
         df[f'close_N_days_ago'] = df.groupby('code')['close'].shift(N-1)
@@ -267,16 +277,47 @@ def calc_plate_rps(all_changes, target_date, output_dir='tdx_rps_subjob'):
         df[f'rps{N}'] = ((total - df[f'rps{N}_rank']) / (total - 1) * 100).round(2)
     # 只保留目标日期
     date = pd.to_datetime(target_date)
-    snapshot = df[df['date'] == date][['code', 'name', 'change_5', 'change_10', 'change_20', 'change_60', 'rps5', 'rps10', 'rps20', 'rps60']]
+    snapshot = df[df['date'] == date][['code', 'name', 'change_5', 'change_10', 'change_20', 'change_60', 'rps5', 'rps10', 'rps20', 'rps60', 'volume', 'volume_5d_avg']]
     snapshot = snapshot.sort_values('change_5', ascending=False)
     # 保存到 bankuai_rps_date 目录
     out_path = os.path.join('tdx_rps_subjob/bankuai_rps_date', f'plate_rps_{date.strftime("%Y%m%d")}.csv')
     snapshot.to_csv(out_path, index=False, encoding='utf-8-sig')
     print(f'多周期概念板块涨幅和RPS已保存到 {out_path}')
 
+def check_plate_buy_point1(rps5, pre_rps5, rps10, pre_rps10, rps20, pre_rps20, rps60, pre_rps60, volume, pre_volume, volume_5d_avg):
+    """
+    买点筛选条件：
+    - rps60 < 60;
+    - rps5 > 60 && rps5 - pre_rps5 > 15 && rps10 - pre_rps10 > 20 && rps20 - pre_rps20 > 10
+    - volume > pre_volume * 1.3
+    """
+    try:
+        rps5 = float(rps5)
+        pre_rps5 = float(pre_rps5) if pre_rps5 is not None else None
+        rps10 = float(rps10)
+        pre_rps10 = float(pre_rps10) if pre_rps10 is not None else None
+        rps20 = float(rps20)
+        pre_rps20 = float(pre_rps20) if pre_rps20 is not None else None
+        rps60 = float(rps60)
+        pre_rps60 = float(pre_rps60) if pre_rps60 is not None else None
+        volume = float(volume) if volume is not None else None
+        pre_volume = float(pre_volume) if pre_volume is not None else None
+        volume_5d_avg = float(volume_5d_avg) if volume_5d_avg is not None else None
+    except Exception:
+        return False
+    return (
+        rps60 < 60
+        and rps5 > 60 and (pre_rps5 is not None and rps5 - pre_rps5 > 15)
+        and (pre_rps10 is not None and rps10 - pre_rps10 > 20)
+        and (pre_rps20 is not None and rps20 - pre_rps20 > 10)
+        and (pre_volume is not None and volume is not None and volume > pre_volume * 1.3)
+    )
+    
+
 def find_plate_buy_points(snapshot_dir='tdx_rps_subjob/bankuai_rps_date'):
     """
     遍历所有快照文件，找出板块rps5从低位突破80且rps20>rps60的买点，输出日期和板块名称。
+    新增：二次筛选，要求当天涨幅>2%，且量能>5日均量1.2倍。
     """
     # 收集所有快照文件，按日期排序
     files = [f for f in os.listdir(snapshot_dir) if f.startswith('plate_rps_') and f.endswith('.csv')]
@@ -289,6 +330,7 @@ def find_plate_buy_points(snapshot_dir='tdx_rps_subjob/bankuai_rps_date'):
         date_str = fname.replace('plate_rps_', '').replace('.csv', '')
         date_list.append(date_str)
         df = pd.read_csv(os.path.join(snapshot_dir, fname), dtype={'code': str})
+        # 兼容老快照无volume/volume_5d_avg
         for _, row in df.iterrows():
             code = row['code']
             name = row['name']
@@ -296,36 +338,75 @@ def find_plate_buy_points(snapshot_dir='tdx_rps_subjob/bankuai_rps_date'):
             rps10 = row['rps10']
             rps20 = row['rps20']
             rps60 = row['rps60']
+            change_5 = row['change_5'] if 'change_5' in row else None
+            volume = row['volume'] if 'volume' in row else None
+            volume_5d_avg = row['volume_5d_avg'] if 'volume_5d_avg' in row else None
             if code not in plate_rps_history:
                 plate_rps_history[code] = []
                 plate_name_map[code] = name
-            plate_rps_history[code].append({'date': date_str, 'rps5': rps5, 'rps10': rps10, 'rps20': rps20, 'rps60': rps60})
-    # 检查买点
-    print('日期,板块名称,板块代码')
+            plate_rps_history[code].append({'date': date_str, 'rps5': rps5, 'rps10': rps10, 'rps20': rps20, 'rps60': rps60, 'change_5': change_5, 'volume': volume, 'volume_5d_avg': volume_5d_avg})
+    # 新增：先保存所有明细到csv
+    all_history_rows = []
     for code, rps_list in plate_rps_history.items():
-        prev_rps5 = None
+        for item in rps_list:
+            all_history_rows.append({
+                'date': item['date'],
+                'name': plate_name_map[code],
+                'code': code,
+                'rps5': item['rps5'],
+                'rps10': item['rps10'],
+                'rps20': item['rps20'],
+                'rps60': item['rps60'],
+                'change_5': item.get('change_5', None),
+                'volume': item.get('volume', None),
+                'volume_5d_avg': item.get('volume_5d_avg', None)
+            })
+    all_history_df = pd.DataFrame(all_history_rows)
+    all_history_df = all_history_df.sort_values(['date', 'code'])
+    all_history_df.to_csv('tdx_rps_subjob/plate_rps_history.csv', index=False, encoding='utf-8-sig')
+    print('所有板块RPS历史明细已保存到 tdx_rps_subjob/plate_rps_history.csv')
+    
+    
+    
+    # 买点筛选
+    print('日期,板块名称,板块代码')
+    results1 = []
+    results2 = []
+    for code, rps_list in plate_rps_history.items():
+        pre_rps5 = pre_rps10 = pre_rps20 = pre_rps60 = pre_volume = None
         for i, item in enumerate(rps_list):
             rps5 = item['rps5']
             rps10 = item['rps10']
             rps20 = item['rps20']
             rps60 = item['rps60']
-            # 只要rps5是数值
-            try:
-                rps5 = float(rps5)
-                rps10 = float(rps10)
-                rps20 = float(rps20)
-                rps60 = float(rps60)
-            except Exception:
-                continue
-            # rps5从低位突破80: 前一天<=80, 今天>80
-            if prev_rps5 is not None:
-                try:
-                    prev_rps5_f = float(prev_rps5)
-                except Exception:
-                    prev_rps5_f = None
-                if prev_rps5_f is not None and prev_rps5_f <= 70 and rps5 > 80 and rps20 > 80 and rps20 > rps60:
-                    print(f"{item['date']},{plate_name_map[code]},{code}, {rps5}, {rps10}, {rps20}, {rps60}")
-            prev_rps5 = rps5
+            volume = item.get('volume', None)
+            volume_5d_avg = item.get('volume_5d_avg', None)
+            if check_plate_buy_point1(rps5, pre_rps5, rps10, pre_rps10, rps20, pre_rps20, rps60, pre_rps60, volume, pre_volume, volume_5d_avg):
+                results1.append((item['date'], plate_name_map[code], code))
+            # if check_plate_buy_point2(...):
+            #     results2.append(...)
+            pre_rps5 = rps5
+            pre_rps10 = rps10
+            pre_rps20 = rps20
+            pre_rps60 = rps60
+            pre_volume = volume
+    # 按日期排序并输出
+    print(f"激进买点：")
+    results1.sort(key=lambda x: x[0])
+    for row in results1:
+        print(f"{row[0]},{row[1]},{row[2]}")
+
+    print(f"确定买点：")
+    results2.sort(key=lambda x: x[0])
+    for row in results2:
+        print(f"{row[0]},{row[1]},{row[2]}")
+
+
+
+
+
+
+
 
 def main():
     """主程序"""
