@@ -274,6 +274,59 @@ def calc_plate_rps(all_changes, target_date, output_dir='tdx_rps_subjob'):
     snapshot.to_csv(out_path, index=False, encoding='utf-8-sig')
     print(f'多周期概念板块涨幅和RPS已保存到 {out_path}')
 
+def find_plate_buy_points(snapshot_dir='tdx_rps_subjob/bankuai_rps_date'):
+    """
+    遍历所有快照文件，找出板块rps5从低位突破80且rps20>rps60的买点，输出日期和板块名称。
+    """
+    # 收集所有快照文件，按日期排序
+    files = [f for f in os.listdir(snapshot_dir) if f.startswith('plate_rps_') and f.endswith('.csv')]
+    files = sorted(files)
+    # 记录每个板块的rps5序列
+    plate_rps_history = {}
+    plate_name_map = {}
+    date_list = []
+    for fname in files:
+        date_str = fname.replace('plate_rps_', '').replace('.csv', '')
+        date_list.append(date_str)
+        df = pd.read_csv(os.path.join(snapshot_dir, fname), dtype={'code': str})
+        for _, row in df.iterrows():
+            code = row['code']
+            name = row['name']
+            rps5 = row['rps5']
+            rps10 = row['rps10']
+            rps20 = row['rps20']
+            rps60 = row['rps60']
+            if code not in plate_rps_history:
+                plate_rps_history[code] = []
+                plate_name_map[code] = name
+            plate_rps_history[code].append({'date': date_str, 'rps5': rps5, 'rps10': rps10, 'rps20': rps20, 'rps60': rps60})
+    # 检查买点
+    print('日期,板块名称,板块代码')
+    for code, rps_list in plate_rps_history.items():
+        prev_rps5 = None
+        for i, item in enumerate(rps_list):
+            rps5 = item['rps5']
+            rps10 = item['rps10']
+            rps20 = item['rps20']
+            rps60 = item['rps60']
+            # 只要rps5是数值
+            try:
+                rps5 = float(rps5)
+                rps10 = float(rps10)
+                rps20 = float(rps20)
+                rps60 = float(rps60)
+            except Exception:
+                continue
+            # rps5从低位突破80: 前一天<=80, 今天>80
+            if prev_rps5 is not None:
+                try:
+                    prev_rps5_f = float(prev_rps5)
+                except Exception:
+                    prev_rps5_f = None
+                if prev_rps5_f is not None and prev_rps5_f <= 70 and rps5 > 80 and rps20 > 80 and rps20 > rps60:
+                    print(f"{item['date']},{plate_name_map[code]},{code}, {rps5}, {rps10}, {rps20}, {rps60}")
+            prev_rps5 = rps5
+
 def main():
     """主程序"""
     import sys
@@ -297,6 +350,8 @@ def main():
                     print(f"{out_path} 已存在，跳过计算")
                     continue
                 calc_plate_rps(all_changes, d.strftime('%Y-%m-%d'))
+            # 可在main()中调用 find_plate_buy_points() 进行买点扫描
+            find_plate_buy_points()
         print("程序执行完成")
     except Exception as e:
         print(f"程序执行出错: {str(e)}")
