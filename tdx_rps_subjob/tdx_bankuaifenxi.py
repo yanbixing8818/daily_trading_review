@@ -24,13 +24,16 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 import glob
 from core.trade_time import stock_trade_date, get_previous_trade_date, is_trade_date  # 新增导入
 import sys
+from mootdx.quotes import Quotes
 
 # 配置参数
 CONFIG = {
     'tdx_path': '/mnt/c/new_tdx',  # 通达信安装路径
     'output_file': 'top_plate_indices.csv',  # 输出文件名
     'plate_prefixes': ['880', '885', '886', '887', '399'],  # 板块指数前缀
-    'days': 121  # 分析天数（最近一年）
+    'days': 121,  # 分析
+    'real_time_server': '119.147.212.81',  # 或你常用的行情服务器IP
+    'real_time_port': 7709                 # 通达信标准端口
 }
 
 def load_plate_name_mapping(bankuai_dir='tdx_rps_subjob/tdx_bankuaigainian'):
@@ -139,12 +142,10 @@ def calculate_both_changes(reader, plate_indices):
         name = row['name']
         try:
             daily_data = reader.daily(symbol=symbol)
-            # print(f"{symbol} 日线数据: {None if daily_data is None else len(daily_data)} 行")
             if daily_data is None or daily_data.empty:
                 continue
             mask = pd.Series(daily_data.index.date, index=daily_data.index).isin(use_dates_set)
             daily_data = daily_data.loc[mask]
-            # print(f"{symbol} 过滤后剩余: {len(daily_data)} 行, 日期: {list(daily_data.index.date)}")
             if len(daily_data) < 2:
                 continue
             # 保留volume字段
@@ -157,21 +158,18 @@ def calculate_both_changes(reader, plate_indices):
             daily_data['pct_change'] = daily_data['close'].pct_change() * 100
             daily_data['symbol'] = symbol
             daily_data['name'] = name
-            # 不再强制 daily_data['date'] = daily_data.index
-            debug_df = daily_data[['symbol', 'name', 'open', 'close', 'change', 'pct_change']].copy()
-            debug_df['volume'] = daily_data['volume']
-            debug_df['date'] = daily_data.index
+            # 保留所有原始行情字段
+            daily_data['date'] = daily_data.index
+            fields_to_keep = ['symbol', 'name', 'date', 'open', 'high', 'low', 'close', 'change', 'pct_change', 'volume']
+            for col in fields_to_keep:
+                if col not in daily_data.columns:
+                    daily_data[col] = np.nan
+            tmp = daily_data[fields_to_keep].copy()
+            tmp = tmp.reset_index(drop=True)
+            results.append(tmp)
+            # debug输出
+            debug_df = daily_data[fields_to_keep].copy()
             debug_rows.append(debug_df)
-            # 结果输出时，date直接用index或已有date列，且都reset_index(drop=True)
-            if 'date' in daily_data.columns:
-                tmp = daily_data[['symbol', 'name', 'date', 'close', 'change', 'pct_change', 'volume']].copy()
-                tmp = tmp.reset_index(drop=True)
-                results.append(tmp)
-            else:
-                tmp = daily_data[['symbol', 'name', 'close', 'change', 'pct_change', 'volume']].copy()
-                tmp['date'] = daily_data.index
-                tmp = tmp.reset_index(drop=True)
-                results.append(tmp)
         except Exception as e:
             print(f"处理{symbol}({name})失败: {str(e)}")
     # 保存所有调试信息到csv
@@ -258,34 +256,96 @@ def run_plate_analysis():
         return
     return all_changes
 
-def calc_plate_rps(all_changes, target_date, output_dir='tdx_rps_subjob'):
-    """按指定日期输出快照csv，文件名带日期。"""
+def calc_plate_rps(all_changes, target_date, output_dir='tdx_rps_subjob', save_path=None):
     import pandas as pd, os
+    print('[DEBUG] === calc_plate_rps: 入口 ===')
+    print('[DEBUG] all_changes.shape:', all_changes.shape)
+    print('[DEBUG] all_changes.columns:', list(all_changes.columns))
+    print('[DEBUG] all_changes[date] min:', all_changes['date'].min(), 'max:', all_changes['date'].max())
+    print('[DEBUG] all_changes[date].value_counts().head(10):\n', all_changes['date'].value_counts().head(10))
     df = all_changes.copy()
-    df = df[df['symbol'].str[2:5] == '880']  # symbol如sh880568
-    df = df[df['name'] != df['symbol']]     # 有中文名
-    df = df.rename(columns={'symbol': 'code'})
+    print('[DEBUG] after copy, df.shape:', df.shape)
+    print('[DEBUG] after copy, df[date] min:', df['date'].min(), 'max:', df['date'].max())
+    print('[DEBUG] after copy, df[date].value_counts().head(10):\n', df['date'].value_counts().head(10))
+    df = df[df['code'].str[2:5] == '880']  # code如sh880568
+    print('[DEBUG] after symbol filter, df.shape:', df.shape)
+    print('[DEBUG] after symbol filter, df[date].value_counts().head(10):\n', df['date'].value_counts().head(10))
+    df = df[df['name'] != df['code']]     # 有中文名
+    print('[DEBUG] after name filter, df.shape:', df.shape)
+    print('[DEBUG] after name filter, df[date].value_counts().head(10):\n', df['date'].value_counts().head(10))
+    # 避免重复列
+    if 'code' not in df.columns and 'symbol' in df.columns:
+        df = df.rename(columns={'symbol': 'code'})
+    elif 'code' in df.columns and 'symbol' in df.columns:
+        if df['code'].equals(df['symbol']):
+            df = df.drop(columns=['symbol'])
+        else:
+            df = df.rename(columns={'symbol': 'code_symbol'})
+    print('[DEBUG] after code/symbol处理, df.columns:', list(df.columns))
+    print('[DEBUG] after code/symbol处理, df.shape:', df.shape)
     if 'close' not in df.columns:
         print('警告：数据缺少close列，无法计算RPS')
         return
+    # 统一date类型
+    df['date'] = pd.to_datetime(df['date'])
+    date = pd.to_datetime(target_date)
+    print('[DEBUG] after date类型统一, df[date] min:', df['date'].min(), 'max:', df['date'].max())
+    print('[DEBUG] after date类型统一, df[date].value_counts().head(10):\n', df['date'].value_counts().head(10))
+    # 检查是否有重复的code+date
+    dup = df.duplicated(subset=['code', 'date'], keep=False)
+    if dup.any():
+        print("[DEBUG] 存在重复的 code+date 行：")
+        print(df[dup])
+    # 严格排序并reset_index，保证shift正确
+    df = df.sort_values(['code', 'date']).reset_index(drop=True)
+    print('[DEBUG] after sort, df.shape:', df.shape)
+    print('[DEBUG] after sort, df[date].min:', df['date'].min(), 'max:', df['date'].max())
+    print('[DEBUG] after sort, df[date].value_counts().head(10):\n', df['date'].value_counts().head(10))
+    # debug: 每个code全部日期和close
+    for code in df['code'].unique()[:3]:
+        code_df = df[df['code'] == code].sort_values('date')
+        print(f'[DEBUG] {code} 全部日期和close：')
+        print(code_df[['date', 'close']].tail(10))
     # 计算5日均量
-    df = df.sort_values(['code', 'date'])
     df['volume_5d_avg'] = df.groupby('code')['volume'].rolling(5).mean().reset_index(level=0, drop=True)
     for N in [5, 10, 20, 60]:
-        df = df.sort_values(['code', 'date'])
+        df = df.sort_values(['code', 'date']).reset_index(drop=True)
         df[f'close_N_days_ago'] = df.groupby('code')['close'].shift(N-1)
+        # debug: shift后目标日和前N天的close
+        for code in df['code'].unique()[:3]:
+            code_df = df[df['code'] == code].sort_values('date')
+            print(f'[DEBUG] {code} {N}日shift后：')
+            print(code_df[['date', 'close', f'close_N_days_ago']].tail(N+1))
         df[f'change_{N}'] = (df['close'] / df[f'close_N_days_ago'] - 1) * 100
+        print(f'[DEBUG] {N}日RPS，目标日change_{N}统计：')
+        print(df[df['date'] == date][['code', 'close', f'close_N_days_ago', f'change_{N}']].head(10))
         df[f'rps{N}_rank'] = df.groupby('date')[f'change_{N}'].rank(method='min', ascending=False)
         total = df.groupby('date')[f'change_{N}'].transform('count')
         df[f'rps{N}'] = ((total - df[f'rps{N}_rank']) / (total - 1) * 100).round(2)
     # 只保留目标日期
-    date = pd.to_datetime(target_date)
-    snapshot = df[df['date'] == date][['code', 'name', 'change_5', 'change_10', 'change_20', 'change_60', 'rps5', 'rps10', 'rps20', 'rps60', 'volume', 'volume_5d_avg']]
+    print('[DEBUG] df.columns:', list(df.columns))
+    print(f'[DEBUG] 目标日期{date}的df内容:')
+    print(df[df['date'] == date].head())
+    # 允许保存更多原始行情字段
+    base_cols = ['code', 'name', 'date']
+    extra_cols = []
+    for col in ['open', 'close', 'high', 'low', 'change', 'pct_change', 'volume']:
+        if col in df.columns:
+            extra_cols.append(col)
+    rps_cols = ['change_5', 'change_10', 'change_20', 'change_60', 'rps5', 'rps10', 'rps20', 'rps60', 'volume_5d_avg']
+    save_cols = base_cols + extra_cols + rps_cols
+    # 去重，防止列重复
+    save_cols = [c for i, c in enumerate(save_cols) if c not in save_cols[:i]]
+    snapshot = df[df['date'] == date][save_cols]
     snapshot = snapshot.sort_values('change_5', ascending=False)
-    # 保存到 bankuai_rps_date 目录
-    out_path = os.path.join('tdx_rps_subjob/bankuai_rps_date', f'plate_rps_{date.strftime("%Y%m%d")}.csv')
+    # 保存到指定目录
+    if save_path is not None:
+        out_path = save_path
+    else:
+        out_path = os.path.join('tdx_rps_subjob/bankuai_rps_date', f'plate_rps_{date.strftime("%Y%m%d")}.csv')
     snapshot.to_csv(out_path, index=False, encoding='utf-8-sig')
     print(f'多周期概念板块涨幅和RPS已保存到 {out_path}')
+    return snapshot
 
 def check_plate_buy_point1(rps5, pre_rps5, rps10, pre_rps10, rps20, pre_rps20, rps60, pre_rps60, volume, pre_volume, volume_5d_avg):
     """
@@ -382,22 +442,26 @@ def find_plate_buy_points(snapshot_dir='tdx_rps_subjob/bankuai_rps_date'):
             plate_rps_history[code].append({'date': date_str, 'rps5': rps5, 'rps10': rps10, 'rps20': rps20, 'rps60': rps60, 'change_5': change_5, 'volume': volume, 'volume_5d_avg': volume_5d_avg})
     # 新增：先保存所有明细到csv
     all_history_rows = []
-    for code, rps_list in plate_rps_history.items():
-        for item in rps_list:
-            all_history_rows.append({
-                'date': item['date'],
-                'name': plate_name_map[code],
-                'code': code,
-                'rps5': item['rps5'],
-                'rps10': item['rps10'],
-                'rps20': item['rps20'],
-                'rps60': item['rps60'],
-                'change_5': item.get('change_5', None),
-                'volume': item.get('volume', None),
-                'volume_5d_avg': item.get('volume_5d_avg', None)
-            })
+    for fname in files:
+        date_str = fname.replace('plate_rps_', '').replace('.csv', '')
+        df = pd.read_csv(os.path.join(snapshot_dir, fname), dtype={'code': str})
+        for _, row in df.iterrows():
+            row_dict = row.to_dict()
+            row_dict['date'] = date_str  # 确保date字段一致
+            all_history_rows.append(row_dict)
     all_history_df = pd.DataFrame(all_history_rows)
     all_history_df = all_history_df.sort_values(['date', 'code'])
+
+    # 获取标准字段顺序
+    if files:
+        latest_file = os.path.join(snapshot_dir, files[-1])
+        standard_cols = list(pd.read_csv(latest_file, nrows=1).columns)
+        for col in standard_cols:
+            if col not in all_history_df.columns:
+                all_history_df[col] = None
+        all_history_df = all_history_df[standard_cols]
+    # 统一date为datetime类型
+    all_history_df['date'] = pd.to_datetime(all_history_df['date'])
     all_history_df.to_csv('tdx_rps_subjob/plate_rps_history.csv', index=False, encoding='utf-8-sig')
     print('所有板块RPS历史明细已保存到 tdx_rps_subjob/plate_rps_history.csv')
     
@@ -437,17 +501,239 @@ def find_plate_buy_points(snapshot_dir='tdx_rps_subjob/bankuai_rps_date'):
         print(f"{row[0]},{row[1]},{row[2]}")
 
 
+def get_real_time_plate_data():
+    """
+    实时获取所有板块指数的行情数据
+    返回包含代码、名称、最新价、成交量等信息的DataFrame
+    """
+    # 获取板块指数列表
+    plate_indices = get_plate_indices()
+    if plate_indices.empty:
+        print("未找到符合条件的板块指数")
+        return pd.DataFrame()
+    
+    # 初始化实时行情API
+    quotes = Quotes.factory(market='std', 
+                           tdxdir=CONFIG['tdx_path'],
+                           server=CONFIG['real_time_server'],
+                           port=CONFIG['real_time_port'])
+    
+    real_time_data = []
+    
+    # 分批获取实时行情（每次最多80只）
+    batch_size = 80
+    codes = plate_indices['code'].tolist()  # 这里codes是sh880xxx/sz880xxx
+    for i in range(0, len(codes), batch_size):
+        batch_codes = codes[i:i + batch_size]
+        batch_codes_set = set(batch_codes)
+        try:
+            batch_quotes = quotes.quotes(symbol=batch_codes)
+            if batch_quotes is None or len(batch_quotes) == 0:
+                print(f"警告: 实时行情接口未返回数据, symbols={batch_codes}")
+                continue
+            for idx, row in batch_quotes.iterrows():
+                # row['code'] 是880xxx，batch_codes里是sh880xxx
+                # 找到对应symbol
+                code_no_prefix = str(row['code'])
+                symbol = None
+                for s in batch_codes:
+                    if s.endswith(code_no_prefix):
+                        symbol = s
+                        break
+                if symbol is None:
+                    print(f'警告: 返回的code={row["code"]}找不到对应symbol，已跳过')
+                    continue
+                name_row = plate_indices.loc[plate_indices['code'] == symbol, 'name']
+                if not name_row.empty:
+                    name = name_row.values[0]
+                else:
+                    print(f'警告: symbol={symbol}在板块列表中找不到，已跳过')
+                    continue
+                real_time_data.append({
+                    'code': symbol,
+                    'symbol': symbol,  # 新增，兼容后续分析
+                    'name': name,
+                    'date': datetime.now().strftime('%Y-%m-%d'),
+                    'close': row['price'],
+                    'volume': row['volume']
+                })
+        except Exception as e:
+            print(f"获取实时行情失败: {str(e)}")
+    
+    return pd.DataFrame(real_time_data)
 
+def update_plate_daily_data(real_time_df):
+    """
+    合并历史数据和本次实时数据，去重后保存。
+    """
+    daily_data_path = os.path.join('tdx_rps_subjob', 'plate_daily_data.csv')
+    if os.path.exists(daily_data_path):
+        old_data = pd.read_csv(daily_data_path, dtype={'code': str})
+        old_data['date'] = pd.to_datetime(old_data['date'])
+        # 合并并去重（以code+date为唯一键）
+        updated_data = pd.concat([old_data, real_time_df], ignore_index=True)
+        updated_data = updated_data.drop_duplicates(subset=['code', 'date'], keep='last')
+    else:
+        updated_data = real_time_df.copy()
+    print("[DEBUG] update_plate_daily_data: about to save updated_data")
+    print("[DEBUG] updated_data.columns:", list(updated_data.columns))
+    print("[DEBUG] updated_data.shape:", updated_data.shape)
+    print("[DEBUG] updated_data.head():\n", updated_data.head())
+    if 'symbol' not in updated_data.columns and 'code' in updated_data.columns:
+        updated_data['symbol'] = updated_data['code']
+    updated_data['date'] = pd.to_datetime(updated_data['date'])
+    updated_data.to_csv(daily_data_path, index=False, encoding='utf-8-sig')
+    print(f"板块日线数据已更新到 {daily_data_path}")
+    return updated_data
 
+def real_time_plate_rps():
+    import pandas as pd, os, numpy as np
+    from datetime import datetime
 
+    # 1. 读取历史RPS明细
+    history_path = os.path.join('tdx_rps_subjob', 'plate_rps_history.csv')
+    if os.path.exists(history_path):
+        history_df = pd.read_csv(history_path, dtype={'code': str})
+        history_df['date'] = pd.to_datetime(history_df['date'])
+    else:
+        history_df = pd.DataFrame()
 
+    # 2. 获取实时数据
+    real_time_df = get_real_time_plate_data()
+    print("[DEBUG] real_time_df.columns:", list(real_time_df.columns))
+    print("[DEBUG] real_time_df.shape:", real_time_df.shape)
+    print("[DEBUG] real_time_df.head():\n", real_time_df.head())
+    if real_time_df.empty:
+        print("未获取到实时行情数据")
+        return pd.DataFrame()
+
+    # 3. 只保留历史的昨天及以前
+    today = datetime.now().strftime('%Y-%m-%d')
+    today_date = pd.to_datetime(today)
+    history_df['date'] = pd.to_datetime(history_df['date'])
+    real_time_df['date'] = pd.to_datetime(real_time_df['date'])
+    history_df = history_df[history_df['date'] < today_date]
+    print("[DEBUG] history_df.tail():\n", history_df.tail(10))
+    print("[DEBUG] history_df[date==昨天]:\n", history_df[history_df['date'] == (today_date - pd.Timedelta(days=1))])
+
+    # 4. 用今天的实时行情补充/覆盖历史
+    keep_cols = ['code', 'name', 'date', 'close', 'volume']
+    for col in keep_cols:
+        if col not in real_time_df.columns:
+            real_time_df[col] = np.nan
+    for col in history_df.columns:
+        if col not in real_time_df.columns:
+            real_time_df[col] = np.nan
+    for col in real_time_df.columns:
+        if col not in history_df.columns:
+            history_df[col] = np.nan
+
+    print("[DEBUG] real_time_df for today:", real_time_df.head(10))
+
+    # 合并历史所有天和今天的实时数据，保留所有历史天和今天
+    all_data = pd.concat([history_df, real_time_df], ignore_index=True)
+    all_data = all_data.drop_duplicates(subset=['code', 'date'], keep='last')
+    all_data = all_data.sort_values(['code', 'date']).reset_index(drop=True)
+    print("[DEBUG] all_data[date==today]:\n", all_data[all_data['date'] == today_date].head(10))
+    # 检查目标日期前5天的内容
+    for code in all_data['code'].unique()[:5]:
+        code_df = all_data[all_data['code'] == code].sort_values('date')
+        print(f"[DEBUG] {code} 最近6天: {code_df[['date','close']].tail(6).to_string(index=False)}")
+
+    # 5. 计算RPS
+    date_str = datetime.now().strftime("%Y%m%d")
+    save_path = os.path.join('tdx_rps_subjob', f'realtime_plate_rps_{date_str}.csv')
+    rps_df = calc_plate_rps(all_data, today, save_path=save_path)
+    if rps_df is not None and not rps_df.empty:
+        print(f"实时板块RPS已保存到 {save_path}")
+    
+    # 6. 自动调用买点扫描逻辑，输出最新买点
+    print("===== 实时买点扫描结果 =====")
+    find_today_plate_buy_points()
+    print("===== 实时买点扫描结束 =====")
+    return rps_df
+
+def find_today_plate_buy_points():
+    """
+    只读取昨天的快照（plate_rps_YYYYMMDD.csv）和今天的plate_rps_history.csv，判断今天的买点。
+    """
+    import pandas as pd, os
+    from datetime import datetime, timedelta
+    # 获取今天和昨天日期
+    today = datetime.now().date()
+    yesterday = today - timedelta(days=1)
+    # 找到昨天的快照文件
+    snapshot_dir = 'tdx_rps_subjob/bankuai_rps_date'
+    # 昨日快照
+    yesterday_file = os.path.join(snapshot_dir, f'plate_rps_{yesterday.strftime("%Y%m%d")}.csv')
+    # 今日实时RPS
+    today_file = os.path.join('tdx_rps_subjob', f'realtime_plate_rps_{today.strftime("%Y%m%d")}.csv')
+    if not os.path.exists(yesterday_file):
+        print(f"未找到昨日快照文件: {yesterday_file}")
+        return
+    if not os.path.exists(today_file):
+        print(f"未找到今日实时RPS文件: {today_file}")
+        return
+    df_yesterday = pd.read_csv(yesterday_file, dtype={'code': str})
+    df_today = pd.read_csv(today_file, dtype={'code': str})
+    # 取今天最新日期
+    df_today['date'] = pd.to_datetime(df_today['date'])
+    today_str = df_today['date'].max().strftime('%Y-%m-%d')
+    df_today = df_today[df_today['date'] == df_today['date'].max()]
+    # 建立昨天的rps/volume映射
+    pre_map = {}
+    for _, row in df_yesterday.iterrows():
+        pre_map[row['code']] = {
+            'rps5': row['rps5'] if 'rps5' in row else None,
+            'rps10': row['rps10'] if 'rps10' in row else None,
+            'rps20': row['rps20'] if 'rps20' in row else None,
+            'rps60': row['rps60'] if 'rps60' in row else None,
+            'volume': row['volume'] if 'volume' in row else None,
+        }
+    # 买点筛选
+    print('日期,板块名称,板块代码')
+    results1 = []
+    results2 = []
+    for _, row in df_today.iterrows():
+        code = row['code']
+        name = row['name']
+        rps5 = row['rps5'] if 'rps5' in row else None
+        rps10 = row['rps10'] if 'rps10' in row else None
+        rps20 = row['rps20'] if 'rps20' in row else None
+        rps60 = row['rps60'] if 'rps60' in row else None
+        volume = row['volume'] if 'volume' in row else None
+        volume_5d_avg = row['volume_5d_avg'] if 'volume_5d_avg' in row else None
+        pre = pre_map.get(code, {})
+        pre_rps5 = pre.get('rps5', None)
+        pre_rps10 = pre.get('rps10', None)
+        pre_rps20 = pre.get('rps20', None)
+        pre_rps60 = pre.get('rps60', None)
+        pre_volume = pre.get('volume', None)
+        if check_plate_buy_point1(rps5, pre_rps5, rps10, pre_rps10, rps20, pre_rps20, rps60, pre_rps60, volume, pre_volume, volume_5d_avg):
+            results1.append((today_str, name, code))
+        if check_plate_buy_point2(rps5, pre_rps5, rps10, pre_rps10, rps20, pre_rps20, rps60, pre_rps60, volume, pre_volume, volume_5d_avg):
+            results2.append((today_str, name, code))
+    print(f"激进买点：")
+    for row in results1:
+        print(f"{row[0]},{row[1]},{row[2]}")
+    print(f"确定买点：")
+    for row in results2:
+        print(f"{row[0]},{row[1]},{row[2]}")
 
 
 def main():
     """主程序"""
     import sys
     try:
-        # 运行主流程，获取结果
+        # 检查是否实时模式
+        if '--real-time' in sys.argv:
+            print("===== 实时板块RPS计算模式 =====")
+            real_time_plate_rps()
+            print("实时计算完成")
+            return
+
+        # 原有主流程
+        print("===== 常规板块分析模式 =====")
         all_changes = run_plate_analysis()
         if all_changes is not None:
             save_top_10_plates(all_changes)
