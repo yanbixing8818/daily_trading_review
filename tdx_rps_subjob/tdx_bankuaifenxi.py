@@ -144,17 +144,34 @@ def calculate_both_changes(reader, plate_indices):
             daily_data = reader.daily(symbol=code)
             if daily_data is None or daily_data.empty:
                 continue
+            # 保留volume字段
+            if 'volume' not in daily_data.columns:
+                if 'vol' in daily_data.columns:
+                    daily_data['volume'] = daily_data['vol']
+                else:
+                    daily_data['volume'] = np.nan
+            # 强制类型转换，防止全为NaN
+            daily_data['open'] = pd.to_numeric(daily_data['open'], errors='coerce')
+            daily_data['close'] = pd.to_numeric(daily_data['close'], errors='coerce')
+            daily_data['high'] = pd.to_numeric(daily_data['high'], errors='coerce')
+            daily_data['low'] = pd.to_numeric(daily_data['low'], errors='coerce')
+            daily_data['volume'] = pd.to_numeric(daily_data['volume'], errors='coerce')
+            daily_data['change'] = (daily_data['close'] - daily_data['open']) / daily_data['open'] * 100
+            daily_data['pct_change'] = daily_data['close'].pct_change() * 100
+            # print(f"[DEBUG] {code} change head: {daily_data['change'].head().to_list()}")
+            # print(f"[DEBUG] {code} pct_change head: {daily_data['pct_change'].head().to_list()}")
+            # print(f"[DEBUG] {code} change all NaN: {daily_data['change'].isna().all()}")
+            # print(f"[DEBUG] {code} pct_change all NaN: {daily_data['pct_change'].isna().all()}")
             print(f"[DEBUG] daily_data.columns before adding code: {daily_data.columns}")
             daily_data['code'] = code
-            print(f"[DEBUG] daily_data.columns after adding code: {daily_data.columns}")
             daily_data['name'] = name
             daily_data['date'] = daily_data.index
             fields_to_keep = ['code', 'name', 'date', 'open', 'high', 'low', 'close', 'change', 'pct_change', 'volume']
             for col in fields_to_keep:
                 if col not in daily_data.columns:
                     daily_data[col] = np.nan
-            print(f"[DEBUG] fields_to_keep: {fields_to_keep}")
-            print(f"[DEBUG] daily_data[fields_to_keep].head():\n{daily_data[fields_to_keep].head()}")
+            # print(f"[DEBUG] fields_to_keep: {fields_to_keep}")
+            # print(f"[DEBUG] daily_data[fields_to_keep].head():\n{daily_data[fields_to_keep].head()}")
             tmp = daily_data[fields_to_keep].copy()
             tmp = tmp.reset_index(drop=True)
             results.append(tmp)
