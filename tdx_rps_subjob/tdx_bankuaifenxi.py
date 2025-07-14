@@ -435,6 +435,33 @@ def check_plate_buy_point2(rps5, pre_rps5, rps10, pre_rps10, rps20, pre_rps20, r
         and (pre_volume is not None and volume is not None and volume > pre_volume * 1.5)
     )
 
+def check_plate_buy_point3(rps5, pre_rps5, rps10, pre_rps10, rps20, pre_rps20, rps60, pre_rps60, volume, pre_volume, volume_5d_avg):
+    """
+    买点筛选条件：
+    - rps5 - pre_rps5 > 40
+    - rps10 - pre_rps10 > 40
+    - rps20 - pre_rps20 > 20
+    - rps60 > 80
+    - volume > pre_volume * 1.1
+    """
+    try:
+        rps5 = float(rps5)
+        pre_rps5 = float(pre_rps5) if pre_rps5 is not None else None
+        rps10 = float(rps10)
+        rps20 = float(rps20)
+        rps60 = float(rps60)
+        volume = float(volume) if volume is not None else None
+        pre_volume = float(pre_volume) if pre_volume is not None else None
+    except Exception:
+        return False
+    return (
+        (pre_rps5 is not None and rps5 - pre_rps5 > 40)
+        and (pre_rps10 is not None and rps10 - pre_rps10 > 40)
+        and (pre_rps20 is not None and rps20 - pre_rps20 > 20)
+        and rps60 > 80
+        and (pre_volume is not None and volume is not None and volume > pre_volume * 1.1)
+    )
+
 
 
 def find_plate_buy_points(snapshot_dir='tdx_rps_subjob/bankuai_rps_date'):
@@ -499,6 +526,7 @@ def find_plate_buy_points(snapshot_dir='tdx_rps_subjob/bankuai_rps_date'):
     print('日期,板块名称,板块代码')
     results1 = []
     results2 = []
+    results3 = []
     for code, rps_list in plate_rps_history.items():
         pre_rps5 = pre_rps10 = pre_rps20 = pre_rps60 = pre_volume = None
         for i, item in enumerate(rps_list):
@@ -512,6 +540,8 @@ def find_plate_buy_points(snapshot_dir='tdx_rps_subjob/bankuai_rps_date'):
                 results1.append((item['date'], plate_name_map[code], code))
             if check_plate_buy_point2(rps5, pre_rps5, rps10, pre_rps10, rps20, pre_rps20, rps60, pre_rps60, volume, pre_volume, volume_5d_avg):
                 results2.append((item['date'], plate_name_map[code], code))
+            if check_plate_buy_point3(rps5, pre_rps5, rps10, pre_rps10, rps20, pre_rps20, rps60, pre_rps60, volume, pre_volume, volume_5d_avg):
+                results3.append((item['date'], plate_name_map[code], code))
             pre_rps5 = rps5
             pre_rps10 = rps10
             pre_rps20 = rps20
@@ -526,6 +556,11 @@ def find_plate_buy_points(snapshot_dir='tdx_rps_subjob/bankuai_rps_date'):
     print(f"确定买点：")
     results2.sort(key=lambda x: x[0])
     for row in results2:
+        print(f"{row[0]},{row[1]},{row[2]}")
+    
+    print(f"浅回调买点：")
+    results3.sort(key=lambda x: x[0])
+    for row in results3:
         print(f"{row[0]},{row[1]},{row[2]}")
 
 
@@ -722,6 +757,7 @@ def find_today_plate_buy_points():
     print('日期,板块名称,板块代码')
     results1 = []
     results2 = []
+    results3 = []
     for _, row in df_today.iterrows():
         code = row['code']
         name = row['name']
@@ -741,11 +777,16 @@ def find_today_plate_buy_points():
             results1.append((today_str, name, code))
         if check_plate_buy_point2(rps5, pre_rps5, rps10, pre_rps10, rps20, pre_rps20, rps60, pre_rps60, volume, pre_volume, volume_5d_avg):
             results2.append((today_str, name, code))
+        if check_plate_buy_point3(rps5, pre_rps5, rps10, pre_rps10, rps20, pre_rps20, rps60, pre_rps60, volume, pre_volume, volume_5d_avg):
+            results3.append((today_str, name, code))
     print(f"激进买点：")
     for row in results1:
         print(f"{row[0]},{row[1]},{row[2]}")
     print(f"确定买点：")
     for row in results2:
+        print(f"{row[0]},{row[1]},{row[2]}")
+    print(f"浅回调买点：")
+    for row in results3:
         print(f"{row[0]},{row[1]},{row[2]}")
 
 
