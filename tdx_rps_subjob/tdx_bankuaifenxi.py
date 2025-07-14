@@ -661,7 +661,7 @@ def find_today_plate_buy_points():
     from datetime import datetime, timedelta
     # 获取今天和昨天日期
     today = datetime.now().date()
-    yesterday = today - timedelta(days=1)
+    yesterday = get_previous_trade_date(today)
     # 找到昨天的快照文件
     snapshot_dir = 'tdx_rps_subjob/bankuai_rps_date'
     # 昨日快照
