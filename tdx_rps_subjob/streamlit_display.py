@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 import plotly.graph_objects as go
-from tdx_bankuaifenxi import check_plate_buy_point1, check_plate_buy_point2
+from tdx_bankuaifenxi import check_plate_buy_point1, check_plate_buy_point2, check_plate_buy_point3
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 from mootdx.reader import Reader
 import collections.abc
@@ -235,6 +235,45 @@ def main():
                         plot_kline(reader, selected['code'], selected['name'], selected['date'])
     else:
         st.info("当前无确定买点信号")
+
+    # 浅回调买点表格
+    st.header('浅回调买点')
+    shallow_df = get_buy_points(df, check_plate_buy_point3)
+    if not shallow_df.empty:
+        col1, col2 = st.columns([4, 3])
+        with col1:
+            gb = GridOptionsBuilder.from_dataframe(shallow_df)
+            gb.configure_selection(selection_mode="single", use_checkbox=False)
+            gb.configure_grid_options(domLayout='autoHeight')
+            grid_options = gb.build()
+            grid = AgGrid(
+                shallow_df,
+                gridOptions=grid_options,
+                update_mode=GridUpdateMode.SELECTION_CHANGED,
+                fit_columns_on_grid_load=True,
+                key='shallow_grid'
+            )
+            st.session_state['shallow_selected'] = grid['selected_rows']
+        with col2:
+            sel = st.session_state.get('shallow_selected', None)
+            if sel is not None:
+                if isinstance(sel, pd.DataFrame):
+                    if not sel.empty:
+                        selected = sel.iloc[0].to_dict()
+                        st.subheader(f"选中: {selected['name']} ({selected['code']}) - {selected['date']}")
+                        if is_invalid_date(selected['date']):
+                            st.warning(f"{selected['name']}（{selected['code']}）买点日期为空，无法绘制K线图")
+                        else:
+                            plot_kline(reader, selected['code'], selected['name'], selected['date'])
+                elif isinstance(sel, collections.abc.Sequence) and len(sel) > 0 and isinstance(sel[0], dict):
+                    selected = sel[0]
+                    st.subheader(f"选中: {selected['name']} ({selected['code']}) - {selected['date']}")
+                    if is_invalid_date(selected['date']):
+                        st.warning(f"{selected['name']}（{selected['code']}）买点日期为空，无法绘制K线图")
+                    else:
+                        plot_kline(reader, selected['code'], selected['name'], selected['date'])
+    else:
+        st.info("当前无浅回调买点信号")
 
 if __name__ == '__main__':
     main()
