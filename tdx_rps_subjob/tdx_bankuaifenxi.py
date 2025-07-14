@@ -121,8 +121,8 @@ def calculate_both_changes(reader, plate_indices):
     # 先统计所有板块指数数据中实际出现过的所有日期
     all_dates_in_data = set()
     for _, row in plate_indices.iterrows():
-        symbol = row['code']
-        daily_data = reader.daily(symbol=symbol)
+        code = row['code']  # 统一用code
+        daily_data = reader.daily(symbol=code)
         if daily_data is not None and not daily_data.empty:
             all_dates_in_data.update(daily_data.index.date)
     if not all_dates_in_data:
@@ -138,45 +138,42 @@ def calculate_both_changes(reader, plate_indices):
     results = []
     debug_rows = []
     for _, row in plate_indices.iterrows():
-        symbol = row['code']
+        code = row['code']  # 统一用code
         name = row['name']
         try:
-            daily_data = reader.daily(symbol=symbol)
+            daily_data = reader.daily(symbol=code)
             if daily_data is None or daily_data.empty:
                 continue
-            mask = pd.Series(daily_data.index.date, index=daily_data.index).isin(use_dates_set)
-            daily_data = daily_data.loc[mask]
-            if len(daily_data) < 2:
-                continue
-            # 保留volume字段
-            if 'volume' not in daily_data.columns:
-                if 'vol' in daily_data.columns:
-                    daily_data['volume'] = daily_data['vol']
-                else:
-                    daily_data['volume'] = np.nan
-            daily_data['change'] = (daily_data['close'] - daily_data['open']) / daily_data['open'] * 100
-            daily_data['pct_change'] = daily_data['close'].pct_change() * 100
-            daily_data['symbol'] = symbol
+            print(f"[DEBUG] daily_data.columns before adding code: {daily_data.columns}")
+            daily_data['code'] = code
+            print(f"[DEBUG] daily_data.columns after adding code: {daily_data.columns}")
             daily_data['name'] = name
-            # 保留所有原始行情字段
             daily_data['date'] = daily_data.index
-            fields_to_keep = ['symbol', 'name', 'date', 'open', 'high', 'low', 'close', 'change', 'pct_change', 'volume']
+            fields_to_keep = ['code', 'name', 'date', 'open', 'high', 'low', 'close', 'change', 'pct_change', 'volume']
             for col in fields_to_keep:
                 if col not in daily_data.columns:
                     daily_data[col] = np.nan
+            print(f"[DEBUG] fields_to_keep: {fields_to_keep}")
+            print(f"[DEBUG] daily_data[fields_to_keep].head():\n{daily_data[fields_to_keep].head()}")
             tmp = daily_data[fields_to_keep].copy()
             tmp = tmp.reset_index(drop=True)
             results.append(tmp)
-            # debug输出
             debug_df = daily_data[fields_to_keep].copy()
             debug_rows.append(debug_df)
         except Exception as e:
-            print(f"处理{symbol}({name})失败: {str(e)}")
+            print(f"处理{code}({name})失败: {str(e)}")
+            print(f"[DEBUG][EXCEPTION] daily_data.columns: {daily_data.columns if 'daily_data' in locals() else 'N/A'}")
+            if 'daily_data' in locals():
+                print(f"[DEBUG][EXCEPTION] daily_data.head():\n{daily_data.head()}")
     # 保存所有调试信息到csv
     if debug_rows:
         debug_all = pd.concat(debug_rows)
         debug_all.to_csv(os.path.join('tdx_rps_subjob', 'debug_plate_both_changes.csv'), index=False, encoding='utf-8-sig')
         print('已保存中间过程到 tdx_rps_subjob/debug_plate_both_changes.csv')
+    if not results:
+        print("[DEBUG] calculate_both_changes: results is empty!")
+    else:
+        print("[DEBUG] calculate_both_changes: columns:", results[0].columns)
     if not results:
         return pd.DataFrame()
     return pd.concat(results)
@@ -186,13 +183,13 @@ def get_top_10_daily_changes(all_changes, change_col='change'):
     all_changes = all_changes.reset_index()
     # groupby 用 'date' 字段，避免 date 列为 0,1,2
     top_10 = all_changes.groupby('date', group_keys=False).apply(
-        lambda x: x.nlargest(10, change_col)[['date', 'symbol', 'name', change_col]]
+        lambda x: x.nlargest(10, change_col)[['date', 'code', 'name', change_col]]
     )
     formatted_results = []
     for date, group in top_10.groupby('date'):
         daily_result = {'date': date}
         for i, (_, row) in enumerate(group.iterrows(), 1):
-            daily_result[f'rank{i}_code'] = row['symbol']
+            daily_result[f'rank{i}_code'] = row['code']
             daily_result[f'rank{i}_name'] = row['name']
             daily_result[f'rank{i}_change'] = round(row[change_col], 2) if not pd.isna(row[change_col]) else ''
         formatted_results.append(daily_result)
@@ -251,6 +248,12 @@ def run_plate_analysis():
     
     # 计算每日涨幅
     all_changes = calculate_both_changes(reader, plate_indices)
+    print("[DEBUG] all_changes in run_plate_analysis, type:", type(all_changes))
+    if isinstance(all_changes, pd.DataFrame):
+        print("[DEBUG] all_changes.columns in run_plate_analysis:", all_changes.columns)
+        print("[DEBUG] all_changes.head() in run_plate_analysis:\n", all_changes.head())
+    else:
+        print("[DEBUG] all_changes is not a DataFrame:", all_changes)
     if all_changes.empty:
         print("未获取到有效的涨幅数据")
         return
@@ -264,18 +267,25 @@ def calc_plate_rps(all_changes, target_date, output_dir='tdx_rps_subjob', save_p
     print('[DEBUG] all_changes[date] min:', all_changes['date'].min(), 'max:', all_changes['date'].max())
     print('[DEBUG] all_changes[date].value_counts().head(10):\n', all_changes['date'].value_counts().head(10))
     df = all_changes.copy()
+    print(f"[DEBUG] all_changes.columns: {df.columns}")
+    if 'code' not in df.columns and 'symbol' in df.columns:
+        print("[DEBUG] Renaming symbol to code")
+        df = df.rename(columns={'symbol': 'code'})
+    print(f"[DEBUG] df.columns after rename: {df.columns}")
     print('[DEBUG] after copy, df.shape:', df.shape)
     print('[DEBUG] after copy, df[date] min:', df['date'].min(), 'max:', df['date'].max())
     print('[DEBUG] after copy, df[date].value_counts().head(10):\n', df['date'].value_counts().head(10))
+    print(f"[DEBUG] Before code filter, df.columns: {df.columns}")
     df = df[df['code'].str[2:5] == '880']  # code如sh880568
-    print('[DEBUG] after symbol filter, df.shape:', df.shape)
-    print('[DEBUG] after symbol filter, df[date].value_counts().head(10):\n', df['date'].value_counts().head(10))
+    print(f"[DEBUG] After code filter, df.columns: {df.columns}")
+    print('[DEBUG] after code filter, df[date].value_counts().head(10):\n', df['date'].value_counts().head(10))
+    print(f"[DEBUG] Before name filter, df.columns: {df.columns}")
     df = df[df['name'] != df['code']]     # 有中文名
-    print('[DEBUG] after name filter, df.shape:', df.shape)
+    print(f"[DEBUG] After name filter, df.columns: {df.columns}")
     print('[DEBUG] after name filter, df[date].value_counts().head(10):\n', df['date'].value_counts().head(10))
     # 避免重复列
-    if 'code' not in df.columns and 'symbol' in df.columns:
-        df = df.rename(columns={'symbol': 'code'})
+    if 'symbol' not in df.columns and 'code' in df.columns:
+        pass  # 已经只有code
     elif 'code' in df.columns and 'symbol' in df.columns:
         if df['code'].equals(df['symbol']):
             df = df.drop(columns=['symbol'])
@@ -296,8 +306,9 @@ def calc_plate_rps(all_changes, target_date, output_dir='tdx_rps_subjob', save_p
     if dup.any():
         print("[DEBUG] 存在重复的 code+date 行：")
         print(df[dup])
-    # 严格排序并reset_index，保证shift正确
+    print(f"[DEBUG] Before sort, df.columns: {df.columns}")
     df = df.sort_values(['code', 'date']).reset_index(drop=True)
+    print(f"[DEBUG] After sort, df.columns: {df.columns}")
     print('[DEBUG] after sort, df.shape:', df.shape)
     print('[DEBUG] after sort, df[date].min:', df['date'].min(), 'max:', df['date'].max())
     print('[DEBUG] after sort, df[date].value_counts().head(10):\n', df['date'].value_counts().head(10))
@@ -736,6 +747,8 @@ def main():
         print("===== 常规板块分析模式 =====")
         all_changes = run_plate_analysis()
         if all_changes is not None:
+            print("[DEBUG] all_changes.columns after run_plate_analysis:", all_changes.columns)
+            print("[DEBUG] all_changes.head():\n", all_changes.head())
             save_top_10_plates(all_changes)
             # 获取今天之前的61个交易日
             today = datetime.now().date()
@@ -757,7 +770,14 @@ def main():
             find_plate_buy_points()
         print("程序执行完成")
     except Exception as e:
+        import traceback
         print(f"程序执行出错: {str(e)}")
+        traceback.print_exc()
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        print(f"程序执行出错: {str(e)}")
+        traceback.print_exc()
