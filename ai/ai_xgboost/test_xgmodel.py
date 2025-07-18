@@ -12,6 +12,9 @@ from mootdx.reader import Reader
 import glob
 import talib
 import joblib
+import matplotlib
+matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
+matplotlib.rcParams['axes.unicode_minus'] = False
 
 # 通达信数据目录（请根据实际情况修改）
 TDX_PATH = '/mnt/c/new_tdx'
@@ -62,16 +65,14 @@ def get_local_data(symbol, days=800):
 def preprocess_data(df):
     df = df.replace(['--', 'NaN', 'NA'], np.nan)
     df = df.dropna()
-    numeric_cols = ['open', 'high', 'low', 'close', 'volume', 'amount', 'pe', 'pb', 'ps']
+    numeric_cols = ['open', 'high', 'low', 'close', 'volume', 'amount']
     for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
+    # 衍生特征
     if 'close' in df.columns and 'volume' in df.columns:
         df['市值'] = df['close'] * df['volume']
         df['市值_log'] = np.log(df['市值'] + 1)
-    if 'pe' in df.columns:
-        df['pe_inv'] = 1 / (df['pe'] + 1e-6)
-    if 'volume' in df.columns and 'close' in df.columns:
         df['量价比'] = df['volume'] / (df['close'].abs() + 0.01)
     return df
 
@@ -112,12 +113,15 @@ def prepare_labels(df):
 
 def feature_selection(df):
     features = [
-        'open', 'high', 'low', 'close', 'volume', 'amount', 'pe', 'pb', 'ps',
+        'open', 'high', 'low', 'close', 'volume', 'amount',
+        '市值', '市值_log', '量价比',
+        # 下面这些特征如果后续技术指标计算有生成可以加上
         'ma5', 'ma20', 'macd', 'signal', 'rsi', 'boll_mid', 'boll_upper', 'boll_lower',
-        '市值_log', 'pe_inv', '量价比', 'momentum',
+        'momentum',
         'close_lag1', 'close_lag2', 'close_lag3',
         'volume_lag1', 'volume_lag2', 'volume_lag3'
     ]
+    # 只保留实际存在的列
     features = [f for f in features if f in df.columns]
     return features
 
@@ -126,9 +130,9 @@ def main():
     model_path = 'xgb_model.json'
     scaler_path = 'scaler.pkl'
     # 1. 原始数据
-    if os.path.exists('raw_data.csv'):
-        stock_data = pd.read_csv('raw_data.csv')
-        print('已加载 raw_data.csv')
+    if os.path.exists('1_raw_data.csv'):
+        stock_data = pd.read_csv('1_raw_data.csv')
+        print('已加载 1_raw_data.csv')
     else:
         print("获取本地通达信股票列表...")
         stock_list = get_stock_list()
@@ -143,33 +147,33 @@ def main():
             return
         stock_data = pd.concat(all_data, ignore_index=True)
         print("原始数据维度:", stock_data.shape)
-        stock_data.to_csv('raw_data.csv', index=False)
+        stock_data.to_csv('1_raw_data.csv', index=False, encoding='utf-8-sig')
     # 2. 预处理
-    if os.path.exists('preprocessed_data.csv'):
-        stock_data = pd.read_csv('preprocessed_data.csv')
-        print('已加载 preprocessed_data.csv')
+    if os.path.exists('2_preprocessed_data.csv'):
+        stock_data = pd.read_csv('2_preprocessed_data.csv')
+        print('已加载 2_preprocessed_data.csv')
     else:
         stock_data = preprocess_data(stock_data)
         print("预处理后数据维度:", stock_data.shape)
-        stock_data.to_csv('preprocessed_data.csv', index=False)
+        stock_data.to_csv('2_preprocessed_data.csv', index=False, encoding='utf-8-sig')
     # 3. 技术指标
-    if os.path.exists('tech_data.csv'):
-        tech_data = pd.read_csv('tech_data.csv')
-        print('已加载 tech_data.csv')
+    if os.path.exists('3_tech_data.csv'):
+        tech_data = pd.read_csv('3_tech_data.csv')
+        print('已加载 3_tech_data.csv')
     else:
         print("计算技术指标...")
         tech_data = calculate_technical_features(stock_data)
-        tech_data.to_csv('tech_data.csv', index=False)
+        tech_data.to_csv('3_tech_data.csv', index=False, encoding='utf-8-sig')
     # 4. 标签
-    if os.path.exists('labeled_data.csv'):
-        labeled_data = pd.read_csv('labeled_data.csv')
-        print('已加载 labeled_data.csv')
+    if os.path.exists('4_labeled_data.csv'):
+        labeled_data = pd.read_csv('4_labeled_data.csv')
+        print('已加载 4_labeled_data.csv')
     else:
         print("准备标签...")
         labeled_data = prepare_labels(tech_data)
         labeled_data = labeled_data.dropna()
         print("最终可用数据维度:", labeled_data.shape)
-        labeled_data.to_csv('labeled_data.csv', index=False)
+        labeled_data.to_csv('4_labeled_data.csv', index=False, encoding='utf-8-sig')
     features = feature_selection(labeled_data)
     X = labeled_data[features]
     y = labeled_data['label']
@@ -221,23 +225,33 @@ def main():
     X_scaled = scaler.transform(X)
     X = pd.DataFrame(X_scaled, columns=features, index=X.index)
     today = datetime.datetime.now().strftime('%Y%m%d')
+    print('DEBUG: today =', today)
+    print('DEBUG: labeled_data["date"] min =', labeled_data['date'].min())
+    print('DEBUG: labeled_data["date"] max =', labeled_data['date'].max())
+    print('DEBUG: labeled_data["date"] nunique =', labeled_data['date'].nunique())
+    print('DEBUG: labeled_data["date"] last 10 unique =', labeled_data['date'].drop_duplicates().sort_values().unique()[-10:])
     today_data = labeled_data[labeled_data['date'] == today]
+    print('DEBUG: today_data.shape =', today_data.shape)
     if not today_data.empty:
         dcurrent = xgb.DMatrix(today_data[features])
         predictions = model.predict(dcurrent)
         today_data = today_data.assign(prediction=predictions)
+        today_data['预测涨跌幅(%)'] = (today_data['prediction'] * 100).round(2)
         selected = today_data.nlargest(20, 'prediction')
         print("\n今日预测未来5日收益率最高的股票：")
-        print(selected[['ts_code', 'date', 'close', 'prediction']])
+        print(selected[['ts_code', 'date', 'close', 'prediction', '预测涨跌幅(%)']])
     else:
         last_date = labeled_data['date'].max()
+        print('DEBUG: fallback last_date =', last_date)
         today_data = labeled_data[labeled_data['date'] == last_date]
+        print('DEBUG: fallback today_data.shape =', today_data.shape)
         dcurrent = xgb.DMatrix(today_data[features])
         predictions = model.predict(dcurrent)
         today_data = today_data.assign(prediction=predictions)
+        today_data['预测涨跌幅(%)'] = (today_data['prediction'] * 100).round(2)
         selected = today_data.nlargest(20, 'prediction')
         print(f"\n使用最新数据({last_date})预测未来5日收益率最高的股票：")
-        print(selected[['ts_code', 'date', 'close', 'prediction']])
+        print(selected[['ts_code', 'date', 'close', 'prediction', '预测涨跌幅(%)']])
 
 if __name__ == "__main__":
     main()
