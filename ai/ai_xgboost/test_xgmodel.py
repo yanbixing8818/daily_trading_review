@@ -85,13 +85,16 @@ def calculate_technical_features(df):
         volume = group['volume'].values if 'volume' in group.columns else None
         # 均线
         df.loc[idx, 'ma5'] = talib.MA(close, timeperiod=5)
+        df.loc[idx, 'ma10'] = talib.MA(close, timeperiod=10)
         df.loc[idx, 'ma20'] = talib.MA(close, timeperiod=20)
         # MACD
         macd, macdsignal, _ = talib.MACD(close)
         df.loc[idx, 'macd'] = macd
         df.loc[idx, 'signal'] = macdsignal
+        df.loc[idx, 'MACD_Signal'] = macdsignal
         # RSI
         df.loc[idx, 'rsi'] = talib.RSI(close, timeperiod=14)
+        df.loc[idx, 'RSI_14'] = talib.RSI(close, timeperiod=14)
         # 布林带
         upper, middle, lower = talib.BBANDS(close, timeperiod=20)
         df.loc[idx, 'boll_upper'] = upper
@@ -115,8 +118,8 @@ def feature_selection(df):
     features = [
         'open', 'high', 'low', 'close', 'volume', 'amount',
         '市值', '市值_log', '量价比',
-        # 下面这些特征如果后续技术指标计算有生成可以加上
-        'ma5', 'ma20', 'macd', 'signal', 'rsi', 'boll_mid', 'boll_upper', 'boll_lower',
+        'ma5', 'ma10', 'ma20', 'macd', 'signal', 'MACD_Signal', 'rsi', 'RSI_14',
+        'boll_mid', 'boll_upper', 'boll_lower',
         'momentum',
         'close_lag1', 'close_lag2', 'close_lag3',
         'volume_lag1', 'volume_lag2', 'volume_lag3'
