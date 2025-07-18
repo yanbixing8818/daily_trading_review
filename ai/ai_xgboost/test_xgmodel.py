@@ -76,8 +76,27 @@ def preprocess_data(df):
         df['量价比'] = df['volume'] / (df['close'].abs() + 0.01)
     return df
 
+# 筹码相关
+def get_chip_ratio(close_series, price_range=(0, 0.3), days=20):
+    if len(close_series) < days:
+        return np.nan
+    closes = close_series[-days:]
+    min_p = closes.min()
+    max_p = closes.max()
+    if max_p == min_p:
+        return 1.0
+    normed = (closes - min_p) / (max_p - min_p)
+    ratio = ((normed >= price_range[0]) & (normed <= price_range[1])).sum() / days
+    return ratio
+
+# 筹码稳定度计算公式
+def chip_stability(close_series, days=20):
+    bottom_ratio = get_chip_ratio(close_series, price_range=(0, 0.3), days=days)
+    current_ratio = get_chip_ratio(close_series, price_range=(0.7, 1), days=days)
+    return int(bottom_ratio > 0.65 and current_ratio < 0.21)
+
 def calculate_technical_features(df):
-    # talib 计算技术指标，按每只股票分组
+    # 计算技术指标，按每只股票分组
     df = df.copy()
     for code, group in df.groupby('ts_code'):
         idx = group.index
@@ -100,6 +119,11 @@ def calculate_technical_features(df):
         df.loc[idx, 'boll_upper'] = upper
         df.loc[idx, 'boll_mid'] = middle
         df.loc[idx, 'boll_lower'] = lower
+        # 筹码相关
+        close_series = pd.Series(close)
+        df.loc[idx, 'chip_bottom_ratio_20d'] = close_series.rolling(20).apply(lambda x: get_chip_ratio(x, price_range=(0, 0.3), days=20), raw=False).values
+        df.loc[idx, 'chip_top_ratio_20d'] = close_series.rolling(20).apply(lambda x: get_chip_ratio(x, price_range=(0.7, 1), days=20), raw=False).values
+        df.loc[idx, 'chip_stability_20d'] = close_series.rolling(20).apply(lambda x: chip_stability(x, days=20), raw=False).values
         # 滞后特征
         for i in range(1, 4):
             df.loc[idx, f'close_lag{i}'] = pd.Series(close).shift(i).values
@@ -120,11 +144,11 @@ def feature_selection(df):
         '市值', '市值_log', '量价比',
         'ma5', 'ma10', 'ma20', 'macd', 'signal', 'MACD_Signal', 'rsi', 'RSI_14',
         'boll_mid', 'boll_upper', 'boll_lower',
+        'chip_bottom_ratio_20d', 'chip_top_ratio_20d', 'chip_stability_20d',
         'momentum',
         'close_lag1', 'close_lag2', 'close_lag3',
         'volume_lag1', 'volume_lag2', 'volume_lag3'
     ]
-    # 只保留实际存在的列
     features = [f for f in features if f in df.columns]
     return features
 
