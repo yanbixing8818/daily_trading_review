@@ -133,6 +133,32 @@ def calculate_technical_features(df):
         df.loc[idx, 'momentum'] = pd.Series(close).pct_change(5).values
     return df
 
+def make_attack_label(df, high_window=60, vol_window=20, ma_window=60, vol_ratio=1.5, future_days=5, future_thresh=0.05):
+    df = df.copy()
+    # 1. 新高
+    df['is_new_high'] = df['close'] == df['close'].rolling(high_window).max()
+    # 2. 均线多头排列
+    df['ma5'] = df.groupby('ts_code')['close'].transform(lambda x: talib.MA(x, timeperiod=5))
+    df['ma10'] = df.groupby('ts_code')['close'].transform(lambda x: talib.MA(x, timeperiod=10))
+    df['ma20'] = df.groupby('ts_code')['close'].transform(lambda x: talib.MA(x, timeperiod=20))
+    df['ma60'] = df.groupby('ts_code')['close'].transform(lambda x: talib.MA(x, timeperiod=ma_window))
+    df['multi_ma'] = (df['ma5'] > df['ma10']) & (df['ma10'] > df['ma20']) & (df['ma20'] > df['ma60'])
+    # 3. 放量突破60日线
+    df['ma60_cross'] = (df['close'] > df['ma60']) & (df['close'].shift(1) <= df['ma60'].shift(1))
+    df['vol_ma20'] = df.groupby('ts_code')['volume'].transform(lambda x: x.rolling(vol_window).mean())
+    df['vol_break'] = df['volume'] > df['vol_ma20'] * vol_ratio
+    # 4. 未来5日涨幅
+    df['future_return'] = df.groupby('ts_code')['close'].transform(lambda x: x.shift(-future_days) / x - 1)
+    # 5. 进攻型标签
+    df['attack_label'] = (
+        df['is_new_high'] |
+        df['multi_ma'] |
+        df['ma60_cross'] |
+        df['vol_break'] |
+        (df['future_return'] > future_thresh)
+    ).astype(int)
+    return df
+
 def prepare_labels(df):
     df['future_return'] = df.groupby('ts_code')['close'].transform(lambda x: x.shift(-5) / x - 1)
     df['label'] = df['future_return']
@@ -151,6 +177,32 @@ def feature_selection(df):
     ]
     features = [f for f in features if f in df.columns]
     return features
+
+def evaluate_backtest(df, benchmark_col=None):
+    # 超额收益
+    if benchmark_col and benchmark_col in df.columns:
+        df['excess_return'] = df['future_return'] - df[benchmark_col]
+    else:
+        df['excess_return'] = df['future_return']
+    mean_excess = df['excess_return'].mean()
+    std_excess = df['excess_return'].std()
+    sharpe = mean_excess / std_excess if std_excess != 0 else np.nan
+    sharpe_annual = sharpe * np.sqrt(252/5)
+    # 胜率
+    df['pred_up'] = df['prediction'] > 0
+    df['real_up'] = df['future_return'] > 0
+    win_count = ((df['pred_up']) & (df['real_up'])).sum()
+    total_pred_up = df['pred_up'].sum()
+    win_rate = win_count / total_pred_up if total_pred_up > 0 else np.nan
+    # 盈亏比
+    profit_trades = df[(df['pred_up']) & (df['future_return'] > 0)]['future_return']
+    loss_trades = df[(df['pred_up']) & (df['future_return'] <= 0)]['future_return']
+    avg_profit = profit_trades.mean() if not profit_trades.empty else 0
+    avg_loss = loss_trades.mean() if not loss_trades.empty else 0
+    pl_ratio = avg_profit / abs(avg_loss) if avg_loss != 0 else np.nan
+    print(f'超额收益夏普比率（年化）: {sharpe_annual:.2f}')
+    print(f'胜率: {win_rate:.2%}')
+    print(f'盈亏比: {pl_ratio:.2f}')
 
 def main():
     import os
@@ -174,6 +226,9 @@ def main():
             return
         stock_data = pd.concat(all_data, ignore_index=True)
         print("原始数据维度:", stock_data.shape)
+        # 只保留2024年9月1日及以后的数据
+        stock_data = stock_data[stock_data['date'] >= '20240901']
+        print("筛选后数据维度:", stock_data.shape)
         stock_data.to_csv('1_raw_data.csv', index=False, encoding='utf-8-sig')
     # 2. 预处理
     if os.path.exists('2_preprocessed_data.csv'):
@@ -191,19 +246,17 @@ def main():
         print("计算技术指标...")
         tech_data = calculate_technical_features(stock_data)
         tech_data.to_csv('3_tech_data.csv', index=False, encoding='utf-8-sig')
-    # 4. 标签
-    if os.path.exists('4_labeled_data.csv'):
-        labeled_data = pd.read_csv('4_labeled_data.csv')
-        print('已加载 4_labeled_data.csv')
-    else:
-        print("准备标签...")
-        labeled_data = prepare_labels(tech_data)
-        labeled_data = labeled_data.dropna()
-        print("最终可用数据维度:", labeled_data.shape)
-        labeled_data.to_csv('4_labeled_data.csv', index=False, encoding='utf-8-sig')
-    features = feature_selection(labeled_data)
-    X = labeled_data[features]
-    y = labeled_data['label']
+    # 4. 标签（进攻型）
+    print("生成进攻型标签...")
+    labeled_data = make_attack_label(tech_data)
+    labeled_data = labeled_data.dropna()
+    labeled_data.to_csv('4_labeled_data.csv', index=False, encoding='utf-8-sig')
+    # 只在attack_label=1的样本上做回归
+    attack_data = labeled_data[labeled_data['attack_label'] == 1].copy()
+    print(f"进攻型样本数: {len(attack_data)}")
+    features = feature_selection(attack_data)
+    X = attack_data[features]
+    y = attack_data['future_return']
     # 判断模型文件是否存在
     if os.path.exists(model_path) and os.path.exists(scaler_path):
         print('已加载模型和scaler')
@@ -239,11 +292,16 @@ def main():
         rmse = np.sqrt(mean_squared_error(y_test, preds))
         print(f"测试集RMSE: {rmse:.6f}")
         print("\n特征重要性:")
-        xgb.plot_importance(model, max_num_features=15)
-        plt.tight_layout()
-        plt.savefig('feature_importance.png')
-        plt.close()
-        print('特征重要性已保存为 feature_importance.png')
+        score = model.get_score(importance_type='weight')
+        print('特征重要性字典:', score)
+        if not score:
+            print('警告：模型未能分裂出有效特征，可能是样本太少或特征无效。')
+        else:
+            xgb.plot_importance(model, max_num_features=15)
+            plt.tight_layout()
+            plt.savefig('feature_importance.png')
+            plt.close()
+            print('特征重要性已保存为 feature_importance.png')
         # 保存模型和scaler
         model.save_model(model_path)
         joblib.dump(scaler, scaler_path)
@@ -267,6 +325,10 @@ def main():
         selected = today_data.nlargest(20, 'prediction')
         print("\n今日预测未来5日收益率最高的股票：")
         print(selected[['ts_code', 'date', 'close', 'prediction', '预测涨跌幅(%)']])
+        # 回测评估（仅当有future_return时）
+        if 'future_return' in selected.columns:
+            print('\n回测评估指标:')
+            evaluate_backtest(selected)
     else:
         last_date = labeled_data['date'].max()
         print('DEBUG: fallback last_date =', last_date)
@@ -279,6 +341,10 @@ def main():
         selected = today_data.nlargest(20, 'prediction')
         print(f"\n使用最新数据({last_date})预测未来5日收益率最高的股票：")
         print(selected[['ts_code', 'date', 'close', 'prediction', '预测涨跌幅(%)']])
+        # 回测评估（仅当有future_return时）
+        if 'future_return' in selected.columns:
+            print('\n回测评估指标:')
+            evaluate_backtest(selected)
 
 if __name__ == "__main__":
     main()
