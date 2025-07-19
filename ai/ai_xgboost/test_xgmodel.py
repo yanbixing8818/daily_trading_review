@@ -15,6 +15,7 @@ import joblib
 import matplotlib
 matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
 matplotlib.rcParams['axes.unicode_minus'] = False
+from sklearn.model_selection import TimeSeriesSplit
 
 # 通达信数据目录（请根据实际情况修改）
 TDX_PATH = '/mnt/c/new_tdx'
@@ -267,45 +268,53 @@ def main():
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X)
         X = pd.DataFrame(X_scaled, columns=features, index=X.index)
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42
-        )
-        print(f"训练集样本数: {len(X_train)} 测试集样本数: {len(X_test)}")
-        dtrain = xgb.DMatrix(X_train, label=y_train)
-        dtest = xgb.DMatrix(X_test, label=y_test)
-        params = {
-            'objective': 'reg:squarederror',
-            'eval_metric': 'rmse',
-            'learning_rate': 0.1,
-            'max_depth': 6,
-            'subsample': 0.8,
-            'colsample_bytree': 0.8,
-            'seed': 42
-        }
-        model = xgb.train(
-            params, dtrain, num_boost_round=1000,
-            evals=[(dtrain, 'train'), (dtest, 'eval')],
-            early_stopping_rounds=30,
-            verbose_eval=50
-        )
-        preds = model.predict(dtest)
-        rmse = np.sqrt(mean_squared_error(y_test, preds))
-        print(f"测试集RMSE: {rmse:.6f}")
-        print("\n特征重要性:")
-        score = model.get_score(importance_type='weight')
-        print('特征重要性字典:', score)
-        if not score:
-            print('警告：模型未能分裂出有效特征，可能是样本太少或特征无效。')
-        else:
-            xgb.plot_importance(model, max_num_features=15)
-            plt.tight_layout()
-            plt.savefig('feature_importance.png')
-            plt.close()
-            print('特征重要性已保存为 feature_importance.png')
-        # 保存模型和scaler
-        model.save_model(model_path)
+        tscv = TimeSeriesSplit(n_splits=5)
+        best_rmse = float('inf')
+        best_model = None
+        for fold, (train_index, test_index) in enumerate(tscv.split(X)):
+            print(f"Fold {fold+1}")
+            X_train, X_test = X.iloc[train_index], X.iloc[test_index]
+            y_train, y_test = y.iloc[train_index], y.iloc[test_index]
+            dtrain = xgb.DMatrix(X_train, label=y_train)
+            dtest = xgb.DMatrix(X_test, label=y_test)
+            params = {
+                'objective': 'reg:squarederror',
+                'eval_metric': 'rmse',
+                'learning_rate': 0.1,
+                'max_depth': 6,
+                'subsample': 0.8,
+                'colsample_bytree': 0.8,
+                'seed': 42
+            }
+            model = xgb.train(
+                params, dtrain, num_boost_round=1000,
+                evals=[(dtrain, 'train'), (dtest, 'eval')],
+                early_stopping_rounds=30,
+                verbose_eval=50
+            )
+            preds = model.predict(dtest)
+            rmse = np.sqrt(mean_squared_error(y_test, preds))
+            print(f"Fold {fold+1} RMSE: {rmse:.6f}")
+            score = model.get_score(importance_type='weight')
+            print('特征重要性字典:', score)
+            if not score:
+                print('警告：模型未能分裂出有效特征，可能是样本太少或特征无效。')
+            if fold == tscv.n_splits - 1:
+                # 只保存最后一折的特征重要性图和模型
+                if score:
+                    xgb.plot_importance(model, max_num_features=15)
+                    plt.tight_layout()
+                    plt.savefig('feature_importance.png')
+                    plt.close()
+                    print('特征重要性已保存为 feature_importance.png')
+                best_model = model
+                best_rmse = rmse
+        # 保存最后一折的模型和scaler
+        best_model.save_model(model_path)
         joblib.dump(scaler, scaler_path)
-        print('模型和scaler已保存')
+        print(f'模型和scaler已保存（最后一折RMSE: {best_rmse:.6f}）')
+        model = best_model
+
     # 预测部分
     X_scaled = scaler.transform(X)
     X = pd.DataFrame(X_scaled, columns=features, index=X.index)
