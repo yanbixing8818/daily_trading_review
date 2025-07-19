@@ -227,8 +227,37 @@ def main():
             return
         stock_data = pd.concat(all_data, ignore_index=True)
         print("原始数据维度:", stock_data.shape)
+
         # 只保留2024年9月1日及以后的数据
         stock_data = stock_data[stock_data['date'] >= '20240901']
+
+        # 根据st_stocks.xlsx去除所有st、*st股票
+        st_path = os.path.join(os.getcwd(), 'st_stocks.xlsx')
+        if os.path.exists(st_path):
+            st_df = pd.read_excel(st_path)
+            # 兼容列名
+            code_col = None
+            for col in st_df.columns:
+                if col.lower() in ['ts_code', '股票代码']:
+                    code_col = col
+                    break
+            if code_col is None:
+                raise ValueError('st_stocks.xlsx 必须包含 ts_code 或 股票代码 列')
+            # 转换格式 603268.SH -> sh603268
+            def convert_code(code):
+                code = str(code)
+                if code.endswith('.SH'):
+                    return 'sh' + code[:6]
+                elif code.endswith('.SZ'):
+                    return 'sz' + code[:6]
+                else:
+                    return code.lower()
+            st_codes = set(st_df[code_col].map(convert_code))
+            before = len(stock_data)
+            stock_data = stock_data[~stock_data['ts_code'].astype(str).isin(st_codes)]
+            after = len(stock_data)
+            print(f"已根据st_stocks.xlsx剔除ST股票，剩余: {after}，剔除: {before-after}")
+
         print("筛选后数据维度:", stock_data.shape)
         stock_data.to_csv('1_raw_data.csv', index=False, encoding='utf-8-sig')
     # 2. 预处理
