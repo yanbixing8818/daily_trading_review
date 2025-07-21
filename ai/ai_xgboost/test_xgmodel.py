@@ -134,7 +134,7 @@ def calculate_technical_features(df):
         df.loc[idx, 'momentum'] = pd.Series(close).pct_change(5).values
     return df
 
-def make_attack_label(df, high_window=60, vol_window=20, ma_window=60, vol_ratio=1.5, future_days=5, future_thresh=0.05):
+def make_attack_label(df, high_window=60, vol_window=20, ma_window=60, vol_ratio=1.5, future_days=5, future_thresh=0.05, next_day_thresh=0.1):
     df = df.copy()
     # 1. 新高
     df['is_new_high'] = df['close'] == df['close'].rolling(high_window).max()
@@ -148,9 +148,11 @@ def make_attack_label(df, high_window=60, vol_window=20, ma_window=60, vol_ratio
     df['ma60_cross'] = (df['close'] > df['ma60']) & (df['close'].shift(1) <= df['ma60'].shift(1))
     df['vol_ma20'] = df.groupby('ts_code')['volume'].transform(lambda x: x.rolling(vol_window).mean())
     df['vol_break'] = df['volume'] > df['vol_ma20'] * vol_ratio
-    # 4. 未来5日涨幅
+    # 4. 未来涨幅及标签
     df['future_return'] = df.groupby('ts_code')['close'].transform(lambda x: x.shift(-future_days) / x - 1)
-    # 5. 进攻型标签
+    df['next_day_return'] = df.groupby('ts_code')['close'].transform(lambda x: x.shift(-1) / x - 1)
+    df['binary_label'] = (df['next_day_return'] >= next_day_thresh).astype(int)
+    # 原有进攻型标签
     df['attack_label'] = (
         df['is_new_high'] |
         df['multi_ma'] |
@@ -158,11 +160,8 @@ def make_attack_label(df, high_window=60, vol_window=20, ma_window=60, vol_ratio
         df['vol_break'] |
         (df['future_return'] > future_thresh)
     ).astype(int)
-    return df
-
-def prepare_labels(df):
-    df['future_return'] = df.groupby('ts_code')['close'].transform(lambda x: x.shift(-5) / x - 1)
-    df['label'] = df['future_return']
+    # 新增：或关系的进攻型标签
+    df['attack_label_or'] = (df['attack_label'] | df['binary_label']).astype(int)
     return df
 
 def feature_selection(df):
@@ -279,14 +278,22 @@ def main():
     # 4. 标签（进攻型）
     print("生成进攻型标签...")
     labeled_data = make_attack_label(tech_data)
-    labeled_data = labeled_data.dropna()
+    
+    # 使用更精确的dropna，只对特征列进行检查，保留预测时需要的最新行
+    features_for_dropna = feature_selection(labeled_data)
+    labeled_data = labeled_data.dropna(subset=features_for_dropna)
+
     labeled_data.to_csv('4_labeled_data.csv', index=False, encoding='utf-8-sig')
-    # 只在attack_label=1的样本上做回归
-    attack_data = labeled_data[labeled_data['attack_label'] == 1].copy()
-    print(f"进攻型样本数: {len(attack_data)}")
+    # 只在创业板股票做二分类，正样本为第二天涨幅>=10%或原有进攻型
+    attack_data = labeled_data[labeled_data['attack_label_or'] == 1].copy()
+    # 创业板股票筛选（ts_code以'300'或'301'开头）
+    attack_data = attack_data[attack_data['ts_code'].str[2:5].isin(['300', '301'])].copy()
+    attack_data = attack_data.dropna(subset=['next_day_return'])  # 确保标签不为空
+    print(f"创业板进攻型样本数: {len(attack_data)}")
     features = feature_selection(attack_data)
     X = attack_data[features]
-    y = attack_data['future_return']
+    # 使用 make_attack_label 中生成的二分类标签
+    y = attack_data['binary_label']
     # 判断模型文件是否存在
     if os.path.exists(model_path) and os.path.exists(scaler_path):
         print('已加载模型和scaler')
@@ -298,7 +305,7 @@ def main():
         X_scaled = scaler.fit_transform(X)
         X = pd.DataFrame(X_scaled, columns=features, index=X.index)
         tscv = TimeSeriesSplit(n_splits=5)
-        best_rmse = float('inf')
+        best_score = float('inf')
         best_model = None
         for fold, (train_index, test_index) in enumerate(tscv.split(X)):
             print(f"Fold {fold+1}")
@@ -306,9 +313,14 @@ def main():
             y_train, y_test = y.iloc[train_index], y.iloc[test_index]
             dtrain = xgb.DMatrix(X_train, label=y_train)
             dtest = xgb.DMatrix(X_test, label=y_test)
+            # 动态计算类别权重
+            pos_count = sum(y_train == 1)
+            neg_count = sum(y_train == 0)
+            scale_pos_weight = neg_count / pos_count if pos_count > 0 else 1.0
             params = {
-                'objective': 'reg:squarederror',
-                'eval_metric': 'rmse',
+                'objective': 'binary:logistic',
+                'eval_metric': 'auc',
+                'scale_pos_weight': scale_pos_weight,  # 处理类别不平衡
                 'learning_rate': 0.1,
                 'max_depth': 6,
                 'subsample': 0.8,
@@ -322,8 +334,6 @@ def main():
                 verbose_eval=50
             )
             preds = model.predict(dtest)
-            rmse = np.sqrt(mean_squared_error(y_test, preds))
-            print(f"Fold {fold+1} RMSE: {rmse:.6f}")
             score = model.get_score(importance_type='weight')
             print('特征重要性字典:', score)
             if not score:
@@ -337,52 +347,47 @@ def main():
                     plt.close()
                     print('特征重要性已保存为 feature_importance.png')
                 best_model = model
-                best_rmse = rmse
         # 保存最后一折的模型和scaler
         best_model.save_model(model_path)
         joblib.dump(scaler, scaler_path)
-        print(f'模型和scaler已保存（最后一折RMSE: {best_rmse:.6f}）')
         model = best_model
 
     # 预测部分
-    X_scaled = scaler.transform(X)
-    X = pd.DataFrame(X_scaled, columns=features, index=X.index)
-    today = datetime.datetime.now().strftime('%Y%m%d')
-    print('DEBUG: today =', today)
-    print('DEBUG: labeled_data["date"] min =', labeled_data['date'].min())
-    print('DEBUG: labeled_data["date"] max =', labeled_data['date'].max())
-    print('DEBUG: labeled_data["date"] nunique =', labeled_data['date'].nunique())
-    print('DEBUG: labeled_data["date"] last 10 unique =', labeled_data['date'].drop_duplicates().sort_values().unique()[-10:])
-    today_data = labeled_data[labeled_data['date'] == today]
-    print('DEBUG: today_data.shape =', today_data.shape)
-    if not today_data.empty:
-        dcurrent = xgb.DMatrix(today_data[features])
-        predictions = model.predict(dcurrent)
-        today_data = today_data.assign(prediction=predictions)
-        today_data['预测涨跌幅(%)'] = (today_data['prediction'] * 100).round(2)
-        selected = today_data.nlargest(20, 'prediction')
-        print("\n今日预测未来5日收益率最高的股票：")
-        print(selected[['ts_code', 'date', 'close', 'prediction', '预测涨跌幅(%)']])
-        # 回测评估（仅当有future_return时）
-        if 'future_return' in selected.columns:
-            print('\n回测评估指标:')
-            evaluate_backtest(selected)
+    # 确定要预测的日期
+    predict_date_str = datetime.datetime.now().strftime('%Y%m%d')
+    date_info_str = f"今日({predict_date_str})"
+    data_to_predict = labeled_data[(labeled_data['date'] == predict_date_str) & (labeled_data['ts_code'].str[2:5].isin(['300', '301']))]
+
+    # 如果今日无数据，则使用最新的有数据的日期
+    if data_to_predict.empty:
+        predict_date_str = labeled_data['date'].max()
+        date_info_str = f"最新数据({predict_date_str})"
+        data_to_predict = labeled_data[(labeled_data['date'] == predict_date_str) & (labeled_data['ts_code'].str[2:5].isin(['300', '301']))]
+
+    # 确保有数据可预测
+    if not data_to_predict.empty:
+        # 提取特征并使用加载/训练好的scaler进行缩放
+        features_to_predict = data_to_predict[features]
+        features_to_predict_scaled_np = scaler.transform(features_to_predict)
+        # 将缩放后的numpy数组转回DataFrame，以保留特征名称
+        features_to_predict_scaled = pd.DataFrame(features_to_predict_scaled_np, columns=features, index=features_to_predict.index)
+
+        # 创建DMatrix并预测
+        dcurrent = xgb.DMatrix(features_to_predict_scaled)
+        probas = model.predict(dcurrent)
+        
+        # 整理并输出结果
+        data_to_predict = data_to_predict.assign(probability=probas)
+        data_to_predict['预测明日大涨10%概率(%)'] = (data_to_predict['probability'] * 100).round(2)
+        selected = data_to_predict.nlargest(20, 'probability')
+        
+        print(f"\n使用{date_info_str}预测，创业板明日大涨10%概率最高的股票：")
+        print(selected[['ts_code', 'date', 'close', 'probability', '预测明日大涨10%概率(%)']])
     else:
-        last_date = labeled_data['date'].max()
-        print('DEBUG: fallback last_date =', last_date)
-        today_data = labeled_data[labeled_data['date'] == last_date]
-        print('DEBUG: fallback today_data.shape =', today_data.shape)
-        dcurrent = xgb.DMatrix(today_data[features])
-        predictions = model.predict(dcurrent)
-        today_data = today_data.assign(prediction=predictions)
-        today_data['预测涨跌幅(%)'] = (today_data['prediction'] * 100).round(2)
-        selected = today_data.nlargest(20, 'prediction')
-        print(f"\n使用最新数据({last_date})预测未来5日收益率最高的股票：")
-        print(selected[['ts_code', 'date', 'close', 'prediction', '预测涨跌幅(%)']])
-        # 回测评估（仅当有future_return时）
-        if 'future_return' in selected.columns:
-            print('\n回测评估指标:')
-            evaluate_backtest(selected)
+        print("无数据可用于预测。")
+
+    attack_data['label'] = ((attack_data['next_day_return'] >= 0.1)).astype(int)
+    attack_data.to_csv('5_attack_data_with_label.csv', index=False, encoding='utf-8-sig')
 
 if __name__ == "__main__":
     main()
