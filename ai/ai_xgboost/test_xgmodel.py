@@ -243,6 +243,14 @@ def calculate_technical_features(df, high_window=60, vol_window=20, ma_window=60
         else:
             df.loc[idx, 'turnover_rate'] = np.nan
         
+        # 量比 = 当日成交量 / (前5日平均成交量/240)
+        if 'volume' in group.columns and len(group) > 5:
+            avg_5d_vol = pd.Series(group['volume']).rolling(5).mean()
+            # 量比的分母是“前5日均量/240”，当天的量比用前5天的均量
+            df.loc[idx, 'volume_ratio'] = group['volume'] / (avg_5d_vol / 240)
+        else:
+            df.loc[idx, 'volume_ratio'] = np.nan
+
         close = group['close'].values
         volume = group['volume'].values if 'volume' in group.columns else None
         # 均线
