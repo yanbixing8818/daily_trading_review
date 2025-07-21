@@ -20,6 +20,30 @@ from sklearn.model_selection import TimeSeriesSplit
 # 通达信数据目录（请根据实际情况修改）
 TDX_PATH = '/mnt/c/new_tdx'
 
+def get_stock_name_mapping():
+    """使用baostock获取A股代码和名称的映射，带本地缓存"""
+    cache_file = 'stock_name_mapping.csv'
+    if os.path.exists(cache_file):
+        print(f"从缓存文件 {cache_file} 加载股票名称映射。")
+        return pd.read_csv(cache_file)
+
+    print("从baostock接口获取股票名称映射...")
+    bs.login()
+    rs = bs.query_stock_basic()
+    data_list = []
+    while (rs.error_code == '0') & rs.next():
+        data_list.append(rs.get_row_data())
+    result = pd.DataFrame(data_list, columns=rs.fields)
+    bs.logout()
+    # baostock的ts_code是sh.600000, 我们的格式是sh600000
+    result['ts_code'] = result['code'].str.replace('.', '', regex=False)
+    name_map = result[['ts_code', 'code_name']].rename(columns={'code_name': 'name'})
+    
+    # 保存到缓存文件
+    name_map.to_csv(cache_file, index=False, encoding='utf-8-sig')
+    print(f"股票名称映射已缓存到 {cache_file}。")
+    return name_map
+
 # 获取本地A股代码列表（参考double_model.py）
 def get_stock_list():
     code_set = set()
@@ -227,6 +251,10 @@ def main():
         stock_data = pd.concat(all_data, ignore_index=True)
         print("原始数据维度:", stock_data.shape)
 
+        # 获取并合并股票名称
+        name_map = get_stock_name_mapping()
+        stock_data = pd.merge(stock_data, name_map, on='ts_code', how='left')
+
         # 只保留2024年9月1日及以后的数据
         stock_data = stock_data[stock_data['date'] >= '20240901']
 
@@ -382,7 +410,7 @@ def main():
         selected = data_to_predict.nlargest(20, 'probability')
         
         print(f"\n使用{date_info_str}预测，创业板明日大涨10%概率最高的股票：")
-        print(selected[['ts_code', 'date', 'close', 'probability', '预测明日大涨10%概率(%)']])
+        print(selected[['ts_code', 'name', 'date', 'close', 'probability', '预测明日大涨10%概率(%)']])
     else:
         print("无数据可用于预测。")
 
