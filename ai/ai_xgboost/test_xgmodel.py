@@ -44,7 +44,7 @@ def get_stock_name_mapping():
     print(f"股票名称映射已缓存到 {cache_file}。")
     return name_map
 
-# 获取本地A股代码列表（参考double_model.py）
+# 获取本地A股代码列表
 def get_stock_list():
     code_set = set()
     for market in ['sh', 'sz']:
@@ -211,11 +211,14 @@ def calculate_technical_features(df, high_window=60, vol_window=20, ma_window=60
     
     return df
 
-def create_target(df, next_day_thresh=0.1):
-    """只创建目标标签"""
+def create_target(df, next_day_thresh=0.1, neg_weight=10.0):
+    """只创建目标标签和样本权重"""
     df = df.copy()
     df['next_day_return'] = df.groupby('ts_code')['close'].transform(lambda x: x.shift(-1) / x - 1)
     df['target'] = (df['next_day_return'] >= next_day_thresh).astype(int)
+    # 增加负样本权重：对跌幅>7%的样本赋予更高权重
+    df['sample_weight'] = 1.0
+    df.loc[df['next_day_return'] <= -0.07, 'sample_weight'] = neg_weight
     return df
 
 def feature_selection(df):
@@ -234,7 +237,7 @@ def feature_selection(df):
     features = [f for f in features if f in df.columns]
     return features
 
-def train_or_load_model(X, y, features, model_path='xgb_model.json', scaler_path='scaler.pkl'):
+def train_or_load_model(X, y, features, sample_weight, model_path='xgb_model.json', scaler_path='scaler.pkl'):
     """加载或训练XGBoost模型"""
     if os.path.exists(model_path) and os.path.exists(scaler_path):
         print('已加载模型和scaler')
@@ -255,8 +258,12 @@ def train_or_load_model(X, y, features, model_path='xgb_model.json', scaler_path
             X_train, X_test = X.iloc[train_index], X.iloc[test_index]
             y_train, y_test = y.iloc[train_index], y.iloc[test_index]
             
-            dtrain = xgb.DMatrix(X_train, label=y_train)
-            dtest = xgb.DMatrix(X_test, label=y_test)
+            # 获取对应权重
+            weight_train = sample_weight.iloc[train_index]
+            weight_test = sample_weight.iloc[test_index]
+
+            dtrain = xgb.DMatrix(X_train, label=y_train, weight=weight_train)
+            dtest = xgb.DMatrix(X_test, label=y_test, weight=weight_test)
             
             pos_count = sum(y_train == 1)
             neg_count = sum(y_train == 0)
@@ -426,10 +433,10 @@ def main():
     print(f"用于训练的创业板样本数: {len(train_data)}")
     features = feature_selection(train_data)
     X = train_data[features]
-    # 使用 create_target 中生成的二分类标签
     y = train_data['target']
+    sample_weight = train_data['sample_weight']
     
-    model, scaler = train_or_load_model(X, y, features, model_path=model_path, scaler_path=scaler_path)
+    model, scaler = train_or_load_model(X, y, features, sample_weight, model_path=model_path, scaler_path=scaler_path)
     
     # --- 5. 结果展示 ---
     predict_and_show_results(model, scaler, labeled_data, features)
