@@ -13,6 +13,12 @@ import glob
 import talib
 import joblib
 import matplotlib
+import baostock as bs
+from mootdx.affair import Affair
+import csv
+from sklearn.impute import SimpleImputer
+import pickle
+
 matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
 matplotlib.rcParams['axes.unicode_minus'] = False
 from sklearn.model_selection import TimeSeriesSplit
@@ -43,6 +49,76 @@ def get_stock_name_mapping():
     name_map.to_csv(cache_file, index=False, encoding='utf-8-sig')
     print(f"股票名称映射已缓存到 {cache_file}。")
     return name_map
+
+def get_outstanding_map_from_tdx(tdx_path, csv_path='outstanding_map.csv', zip_filename=None):
+    """
+    从本地通达信财务数据（gpcw*.zip）提取所有A股流通股本，保存为csv，并返回dict。
+    :param tdx_path: 通达信目录
+    :param csv_path: 输出csv路径
+    :param zip_filename: 财务zip文件名（如gpcw20241231.zip），默认自动查找最新
+    :return: {code: outstanding}
+    """
+    if os.path.exists(csv_path):
+        df_out = pd.read_csv(csv_path, dtype={'code': str})
+        if 'code' in df_out.columns and 'outstanding' in df_out.columns:
+            return dict(zip(df_out['code'], df_out['outstanding']))
+        elif 'symbol' in df_out.columns and 'outstanding' in df_out.columns:
+            return dict(zip(df_out['symbol'], df_out['outstanding']))
+        else:
+            print(f"警告：{csv_path} 文件格式异常，将重新生成。")
+            os.remove(csv_path)
+            
+    tmp_dir = os.path.join(tdx_path, 'tmp')
+    os.makedirs(tmp_dir, exist_ok=True)
+    affair_reader = Affair()
+
+    # 如果未指定zip文件，则尝试下载所有财务文件；否则假定文件已存在
+    if zip_filename is None:
+        print("未指定财务zip文件，尝试自动下载和查找...")
+        affair_reader.fetch(downdir=tmp_dir)
+        files = [f for f in os.listdir(tmp_dir) if f.startswith('gpcw') and f.endswith('.zip')]
+        if not files:
+            raise FileNotFoundError('在tmp目录未找到gpcw*.zip财务文件')
+        zip_filename = sorted(files)[-1]
+    
+    print("选用zip文件：", zip_filename)
+    # 检查指定文件是否存在
+    if not os.path.exists(os.path.join(tmp_dir, zip_filename)):
+        raise FileNotFoundError(f"指定的财务文件 {zip_filename} 在 {tmp_dir} 中不存在。")
+
+    # 解析zip
+    data = affair_reader.parse(downdir=tmp_dir, filename=zip_filename)
+    out_rows = []
+    for code in data.index:
+        row = data.loc[code]
+        if isinstance(row, pd.DataFrame):
+            row = row.iloc[0]
+        outstanding = None
+        val = row.get('已上市流通A股')
+        if '已上市流通A股' in data.columns and pd.notna(val):
+            outstanding = val
+        else:
+            val = row.get('自由流通股(股)')
+            if '自由流通股(股)' in data.columns and pd.notna(val):
+                outstanding = val
+            else:
+                val = row.get('总股本')
+                if '总股本' in data.columns and pd.notna(val):
+                    outstanding = val
+        if outstanding is not None:
+            out_rows.append({'code': str(code).zfill(6), 'outstanding': outstanding})
+    df_out = pd.DataFrame(out_rows)
+    if df_out.empty:
+        raise RuntimeError("未能获取任何流通股本数据，请检查通达信财务数据文件内容或字段名。")
+    df_out['code'] = df_out['code'].astype(str).str.zfill(6)
+    df_out.to_csv(csv_path, index=False, quoting=csv.QUOTE_ALL)
+    return dict(zip(df_out['code'], df_out['outstanding']))
+
+OUTSTANDING_MAP = get_outstanding_map_from_tdx(
+    tdx_path=TDX_PATH,
+    csv_path='outstanding_map.csv',
+    zip_filename='gpcw20250331.zip'
+)
 
 # 获取本地A股代码列表
 def get_stock_list():
@@ -159,9 +235,16 @@ def calculate_technical_features(df, high_window=60, vol_window=20, ma_window=60
     df = df.copy()
     for code, group in df.groupby('ts_code'):
         idx = group.index
+        # 获取流通股本并计算换手率
+        code6 = code[2:] if code.startswith(('sh', 'sz')) else code
+        outstanding = OUTSTANDING_MAP.get(code6, np.nan)
+        if outstanding and 'volume' in group.columns:
+            df.loc[idx, 'turnover_rate'] = group['volume'] / outstanding
+        else:
+            df.loc[idx, 'turnover_rate'] = np.nan
+        
         close = group['close'].values
         volume = group['volume'].values if 'volume' in group.columns else None
-        
         # 均线
         df.loc[idx, 'ma5'] = talib.MA(close, timeperiod=5)
         df.loc[idx, 'ma10'] = talib.MA(close, timeperiod=10)
@@ -232,7 +315,9 @@ def feature_selection(df):
         'close_lag1', 'close_lag2', 'close_lag3',
         'volume_lag1', 'volume_lag2', 'volume_lag3',
         # 新增的形态特征
-        'is_new_high', 'multi_ma', 'ma60_cross', 'vol_break'
+        'is_new_high', 'multi_ma', 'ma60_cross', 'vol_break',
+        # 新增换手率
+        'turnover_rate'
     ]
     features = [f for f in features if f in df.columns]
     return features
