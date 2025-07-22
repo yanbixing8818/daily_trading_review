@@ -246,10 +246,34 @@ def calculate_technical_features(df, high_window=60, vol_window=20, ma_window=60
         # 量比 = 当日成交量 / (前5日平均成交量/240)
         if 'volume' in group.columns and len(group) > 5:
             avg_5d_vol = pd.Series(group['volume']).rolling(5).mean()
-            # 量比的分母是“前5日均量/240”，当天的量比用前5天的均量
             df.loc[idx, 'volume_ratio'] = group['volume'] / (avg_5d_vol / 240)
         else:
             df.loc[idx, 'volume_ratio'] = np.nan
+        
+        # DDE大单净量 = （大单买入量 - 大单卖出量）/ 流通股本 × 100%
+        try:
+            minute_reader = Reader.factory(market='std', tdxdir=TDX_PATH)
+            min1_df = minute_reader.minute(symbol=code)
+            if min1_df is not None and not min1_df.empty:
+                # 只取当前分组日期
+                if isinstance(min1_df.index, pd.DatetimeIndex):
+                    min1_df['date'] = min1_df.index.strftime('%Y%m%d')
+                if 'date' in group.columns:
+                    group_dates = set(group['date'].astype(str))
+                    min1_df = min1_df[min1_df['date'].isin(group_dates)]
+                # 近似tick：大单=单分钟成交金额>=500万元
+                large_orders = min1_df[min1_df['amount'] >= 5000000]
+                buy_vol = large_orders[large_orders['close'] > large_orders['open']]['volume'].sum()
+                sell_vol = large_orders[large_orders['close'] < large_orders['open']]['volume'].sum()
+                if outstanding and outstanding > 0:
+                    dde_value = (buy_vol - sell_vol) / outstanding * 100
+                    df.loc[idx, 'dde_net_large_order_volume'] = dde_value
+                else:
+                    df.loc[idx, 'dde_net_large_order_volume'] = np.nan
+            else:
+                df.loc[idx, 'dde_net_large_order_volume'] = np.nan
+        except Exception as e:
+            df.loc[idx, 'dde_net_large_order_volume'] = np.nan
 
         close = group['close'].values
         volume = group['volume'].values if 'volume' in group.columns else None
@@ -325,7 +349,9 @@ def feature_selection(df):
         # 新增的形态特征
         'is_new_high', 'multi_ma', 'ma60_cross', 'vol_break',
         # 新增换手率
-        'turnover_rate'
+        'turnover_rate',
+        # 新增DDE大单净量
+        'dde_net_large_order_volume'
     ]
     features = [f for f in features if f in df.columns]
     return features
