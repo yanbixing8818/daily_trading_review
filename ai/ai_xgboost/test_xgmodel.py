@@ -255,21 +255,20 @@ def calculate_technical_features(df, high_window=60, vol_window=20, ma_window=60
             minute_reader = Reader.factory(market='std', tdxdir=TDX_PATH)
             min1_df = minute_reader.minute(symbol=code)
             if min1_df is not None and not min1_df.empty:
-                # 只取当前分组日期
                 if isinstance(min1_df.index, pd.DatetimeIndex):
+                    min1_df = min1_df.copy()
                     min1_df['date'] = min1_df.index.strftime('%Y%m%d')
-                if 'date' in group.columns:
-                    group_dates = set(group['date'].astype(str))
-                    min1_df = min1_df[min1_df['date'].isin(group_dates)]
-                # 近似tick：大单=单分钟成交金额>=500万元
-                large_orders = min1_df[min1_df['amount'] >= 5000000]
-                buy_vol = large_orders[large_orders['close'] > large_orders['open']]['volume'].sum()
-                sell_vol = large_orders[large_orders['close'] < large_orders['open']]['volume'].sum()
-                if outstanding and outstanding > 0:
-                    dde_value = (buy_vol - sell_vol) / outstanding * 100
-                    df.loc[idx, 'dde_net_large_order_volume'] = dde_value
-                else:
-                    df.loc[idx, 'dde_net_large_order_volume'] = np.nan
+                for i, row in group.iterrows():
+                    cur_date = str(row['date'])
+                    day_min1 = min1_df[min1_df['date'] == cur_date]
+                    large_orders = day_min1[day_min1['amount'] >= 5000000]
+                    buy_vol = large_orders[large_orders['close'] > large_orders['open']]['volume'].sum()
+                    sell_vol = large_orders[large_orders['close'] < large_orders['open']]['volume'].sum()
+                    if outstanding and outstanding > 0:
+                        dde_value = (buy_vol - sell_vol) / outstanding * 100
+                        df.at[i, 'dde_net_large_order_volume'] = dde_value
+                    else:
+                        df.at[i, 'dde_net_large_order_volume'] = np.nan
             else:
                 df.loc[idx, 'dde_net_large_order_volume'] = np.nan
         except Exception as e:
