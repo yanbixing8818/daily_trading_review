@@ -215,8 +215,18 @@ def chip_stability(close_series, days=20):
     current_ratio = get_chip_ratio(close_series, price_range=(0.7, 1), days=days)
     return int(bottom_ratio > 0.65 and current_ratio < 0.21)
 
-def calculate_technical_features(df, high_window=60, vol_window=20, ma_window=60, vol_ratio=1.5):
+# 统一因子开关配置
+FACTOR_SWITCHES = {
+    'dde_net_large_order_volume': True,
+    'pct_chg': True,
+    'amplitude': True,
+    # 如需添加更多因子，继续补充
+}
+
+def calculate_technical_features(df, high_window=60, vol_window=20, ma_window=60, vol_ratio=1.5, factor_switches=None):
     """预处理数据，并计算所有技术指标和形态特征"""
+    if factor_switches is None:
+        factor_switches = {}
     # --- Preprocessing ---
     df = df.replace(['--', 'NaN', 'NA'], np.nan)
     numeric_cols = ['open', 'high', 'low', 'close', 'volume', 'amount']
@@ -243,35 +253,38 @@ def calculate_technical_features(df, high_window=60, vol_window=20, ma_window=60
         else:
             df.loc[idx, 'turnover_rate'] = np.nan
         
-        # 量比 = 当日成交量 / (前5日平均成交量/240)
+        # 量比 = 当日成交量 / (前5日平均成交量/240)   ！！！！！！！！这里需要考虑涨停板对于量能的影响情况！！！！！！！
         if 'volume' in group.columns and len(group) > 5:
             avg_5d_vol = pd.Series(group['volume']).rolling(5).mean()
             df.loc[idx, 'volume_ratio'] = group['volume'] / (avg_5d_vol / 240)
         else:
             df.loc[idx, 'volume_ratio'] = np.nan
         
-        # DDE大单净量 = （大单买入量 - 大单卖出量）/ 流通股本 × 100%
-        try:
-            minute_reader = Reader.factory(market='std', tdxdir=TDX_PATH)
-            min1_df = minute_reader.minute(symbol=code)
-            if min1_df is not None and not min1_df.empty:
-                if isinstance(min1_df.index, pd.DatetimeIndex):
-                    min1_df = min1_df.copy()
-                    min1_df['date'] = min1_df.index.strftime('%Y%m%d')
-                for i, row in group.iterrows():
-                    cur_date = str(row['date'])
-                    day_min1 = min1_df[min1_df['date'] == cur_date]
-                    large_orders = day_min1[day_min1['amount'] >= 5000000]
-                    buy_vol = large_orders[large_orders['close'] > large_orders['open']]['volume'].sum()
-                    sell_vol = large_orders[large_orders['close'] < large_orders['open']]['volume'].sum()
-                    if outstanding and outstanding > 0:
-                        dde_value = (buy_vol - sell_vol) / outstanding * 100
-                        df.at[i, 'dde_net_large_order_volume'] = dde_value
-                    else:
-                        df.at[i, 'dde_net_large_order_volume'] = np.nan
-            else:
+        # DDE大单净量
+        if factor_switches.get('dde_net_large_order_volume', False):
+            try:
+                minute_reader = Reader.factory(market='std', tdxdir=TDX_PATH)
+                min1_df = minute_reader.minute(symbol=code)
+                if min1_df is not None and not min1_df.empty:
+                    if isinstance(min1_df.index, pd.DatetimeIndex):
+                        min1_df = min1_df.copy()
+                        min1_df['date'] = min1_df.index.strftime('%Y%m%d')
+                    for i, row in group.iterrows():
+                        cur_date = str(row['date'])
+                        day_min1 = min1_df[min1_df['date'] == cur_date]
+                        large_orders = day_min1[day_min1['amount'] >= 5000000]
+                        buy_vol = large_orders[large_orders['close'] > large_orders['open']]['volume'].sum()
+                        sell_vol = large_orders[large_orders['close'] < large_orders['open']]['volume'].sum()
+                        if outstanding and outstanding > 0:
+                            dde_value = (buy_vol - sell_vol) / outstanding * 100
+                            df.at[i, 'dde_net_large_order_volume'] = dde_value
+                        else:
+                            df.at[i, 'dde_net_large_order_volume'] = np.nan
+                else:
+                    df.loc[idx, 'dde_net_large_order_volume'] = np.nan
+            except Exception as e:
                 df.loc[idx, 'dde_net_large_order_volume'] = np.nan
-        except Exception as e:
+        else:
             df.loc[idx, 'dde_net_large_order_volume'] = np.nan
 
         close = group['close'].values
@@ -309,9 +322,26 @@ def calculate_technical_features(df, high_window=60, vol_window=20, ma_window=60
             df.loc[idx, f'close_lag{i}'] = pd.Series(close).shift(i).values
             if volume is not None:
                 df.loc[idx, f'volume_lag{i}'] = pd.Series(volume).shift(i).values
-                
-        # 动量特征
-        df.loc[idx, 'momentum'] = pd.Series(close).pct_change(5).values
+        
+        # 新增：3日、5日、10日涨幅
+        if factor_switches.get('pct_chg', True):
+            df.loc[idx, 'pct_chg_3d'] = pd.Series(close).pct_change(3).values
+            df.loc[idx, 'pct_chg_5d'] = pd.Series(close).pct_change(5).values
+            df.loc[idx, 'pct_chg_10d'] = pd.Series(close).pct_change(10).values
+        else:
+            df.loc[idx, 'pct_chg_3d'] = np.nan
+            df.loc[idx, 'pct_chg_5d'] = np.nan
+            df.loc[idx, 'pct_chg_10d'] = np.nan
+            
+        # 新增：3日、5日、10日震荡因子（振幅）
+        if factor_switches.get('amplitude', True):
+            df.loc[idx, 'amplitude_3d'] = (group['high'].rolling(3).max() - group['low'].rolling(3).min()) / group['low'].rolling(3).min()
+            df.loc[idx, 'amplitude_5d'] = (group['high'].rolling(5).max() - group['low'].rolling(5).min()) / group['low'].rolling(5).min()
+            df.loc[idx, 'amplitude_10d'] = (group['high'].rolling(10).max() - group['low'].rolling(10).min()) / group['low'].rolling(10).min()
+        else:
+            df.loc[idx, 'amplitude_3d'] = np.nan
+            df.loc[idx, 'amplitude_5d'] = np.nan
+            df.loc[idx, 'amplitude_10d'] = np.nan
 
     # 2. 形态信号特征 (在所有基础指标计算后进行)
     # 新高
@@ -342,7 +372,8 @@ def feature_selection(df):
         'ma5', 'ma10', 'ma20', 'ma60', 'macd', 'signal', 'MACD_Signal', 'rsi', 'RSI_14',
         'boll_mid', 'boll_upper', 'boll_lower',
         'chip_bottom_ratio_20d', 'chip_top_ratio_20d', 'chip_stability_20d',
-        'momentum',
+        'pct_chg_3d', 'pct_chg_5d', 'pct_chg_10d',
+        'amplitude_3d', 'amplitude_5d', 'amplitude_10d',  # 新增震荡因子
         'close_lag1', 'close_lag2', 'close_lag3',
         'volume_lag1', 'volume_lag2', 'volume_lag3',
         # 新增的形态特征
@@ -558,7 +589,7 @@ def main():
     stock_data = load_or_create('1_raw_data.csv', create_raw_data)
     
     # --- 2. 特征工程与标签创建（增量式）---
-    tech_data = load_or_create_incremental('3_tech_data.csv', calculate_technical_features, stock_data)
+    tech_data = load_or_create_incremental('3_tech_data.csv', calculate_technical_features, stock_data, factor_switches=FACTOR_SWITCHES)
     
     # --- 3. 创建目标标签 ---
     print("创建目标标签...")
@@ -566,7 +597,10 @@ def main():
     
     # 使用更精确的dropna，只对特征列和目标列进行检查
     features_and_target = feature_selection(labeled_data) + ['target']
-    labeled_data = labeled_data.dropna(subset=features_and_target)
+    print('特征列:', features_and_target)
+    print('dropna前样本数:', labeled_data.shape)
+    labeled_data = labeled_data.dropna(subset=['close', 'volume', 'target'])  # 只对核心特征和target做dropna
+    print('dropna后样本数:', labeled_data.shape)
     labeled_data.to_csv('4_labeled_data.csv', index=False, encoding='utf-8-sig')
     
     # --- 4. 模型训练与预测 ---
