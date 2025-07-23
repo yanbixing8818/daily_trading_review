@@ -27,10 +27,16 @@ from sklearn.model_selection import TimeSeriesSplit
 
 # 通达信数据目录（请根据实际情况修改）
 TDX_PATH = '/mnt/c/new_tdx'
+# 统一base_data目录
+BASE_DATA_DIR = 'base_data'
+os.makedirs(BASE_DATA_DIR, exist_ok=True)
+# 统一模型目录
+MODELS_DIR = 'models'
+os.makedirs(MODELS_DIR, exist_ok=True)
 
 def get_stock_name_mapping():
     """使用baostock获取A股代码和名称的映射，带本地缓存"""
-    cache_file = 'stock_name_mapping.csv'
+    cache_file = os.path.join(BASE_DATA_DIR, 'stock_name_mapping.csv')
     if os.path.exists(cache_file):
         print(f"从缓存文件 {cache_file} 加载股票名称映射。")
         return pd.read_csv(cache_file)
@@ -52,7 +58,7 @@ def get_stock_name_mapping():
     print(f"股票名称映射已缓存到 {cache_file}。")
     return name_map
 
-def get_outstanding_map_from_tdx(tdx_path, csv_path='outstanding_map.csv', zip_filename=None):
+def get_outstanding_map_from_tdx(tdx_path, csv_path=None, zip_filename=None):
     """
     从本地通达信财务数据（gpcw*.zip）提取所有A股流通股本，保存为csv，并返回dict。
     :param tdx_path: 通达信目录
@@ -60,6 +66,8 @@ def get_outstanding_map_from_tdx(tdx_path, csv_path='outstanding_map.csv', zip_f
     :param zip_filename: 财务zip文件名（如gpcw20241231.zip），默认自动查找最新
     :return: {code: outstanding}
     """
+    if csv_path is None:
+        csv_path = os.path.join(BASE_DATA_DIR, 'outstanding_map.csv')
     if os.path.exists(csv_path):
         df_out = pd.read_csv(csv_path, dtype={'code': str})
         if 'code' in df_out.columns and 'outstanding' in df_out.columns:
@@ -69,11 +77,9 @@ def get_outstanding_map_from_tdx(tdx_path, csv_path='outstanding_map.csv', zip_f
         else:
             print(f"警告：{csv_path} 文件格式异常，将重新生成。")
             os.remove(csv_path)
-            
     tmp_dir = os.path.join(tdx_path, 'tmp')
     os.makedirs(tmp_dir, exist_ok=True)
     affair_reader = Affair()
-
     # 如果未指定zip文件，则尝试下载所有财务文件；否则假定文件已存在
     if zip_filename is None:
         print("未指定财务zip文件，尝试自动下载和查找...")
@@ -82,12 +88,10 @@ def get_outstanding_map_from_tdx(tdx_path, csv_path='outstanding_map.csv', zip_f
         if not files:
             raise FileNotFoundError('在tmp目录未找到gpcw*.zip财务文件')
         zip_filename = sorted(files)[-1]
-    
     print("选用zip文件：", zip_filename)
     # 检查指定文件是否存在
     if not os.path.exists(os.path.join(tmp_dir, zip_filename)):
         raise FileNotFoundError(f"指定的财务文件 {zip_filename} 在 {tmp_dir} 中不存在。")
-
     # 解析zip
     data = affair_reader.parse(downdir=tmp_dir, filename=zip_filename)
     out_rows = []
@@ -118,7 +122,7 @@ def get_outstanding_map_from_tdx(tdx_path, csv_path='outstanding_map.csv', zip_f
 
 OUTSTANDING_MAP = get_outstanding_map_from_tdx(
     tdx_path=TDX_PATH,
-    csv_path='outstanding_map.csv',
+    csv_path=os.path.join(BASE_DATA_DIR, 'outstanding_map.csv'),
     zip_filename='gpcw20250331.zip'
 )
 
@@ -166,7 +170,7 @@ def get_local_data(symbol, days=800):
 
 def filter_st_stocks(stock_df, st_file='st_stocks.xlsx'):
     """根据st_stocks.xlsx文件剔除ST股票"""
-    st_path = os.path.join(os.getcwd(), st_file)
+    st_path = os.path.join(BASE_DATA_DIR, st_file)
     if not os.path.exists(st_path):
         print(f"警告：未找到ST股票文件 {st_path}，不进行剔除。")
         return stock_df
@@ -422,8 +426,12 @@ def feature_selection(df):
     features = [f for f in features if f in df.columns]
     return features
 
-def train_xgb(X, y, features, sample_weight, model_path='xgb_model.json', scaler_path='xgb_scaler.pkl'):
+def train_xgb(X, y, features, sample_weight, model_path=None, scaler_path=None):
     """加载或训练XGBoost模型"""
+    if model_path is None:
+        model_path = os.path.join(MODELS_DIR, 'xgb_model.json')
+    if scaler_path is None:
+        scaler_path = os.path.join(MODELS_DIR, 'xgb_scaler.pkl')
     if os.path.exists(model_path) and os.path.exists(scaler_path):
         print('已加载XGBoost模型和scaler')
         xgb_model = xgb.Booster()
@@ -481,7 +489,11 @@ def train_xgb(X, y, features, sample_weight, model_path='xgb_model.json', scaler
         xgb_model = best_model
     return xgb_model, xgb_scaler
 
-def train_lightgbm(X, y, features, sample_weight, model_path='lgb_model.txt', scaler_path='lgb_scaler.pkl'):
+def train_lightgbm(X, y, features, sample_weight, model_path=None, scaler_path=None):
+    if model_path is None:
+        model_path = os.path.join(MODELS_DIR, 'lgb_model.txt')
+    if scaler_path is None:
+        scaler_path = os.path.join(MODELS_DIR, 'lgb_scaler.pkl')
     if os.path.exists(model_path) and os.path.exists(scaler_path):
         print('已加载LightGBM模型和scaler')
         lgb_model = lgb.Booster(model_file=model_path)
@@ -654,19 +666,19 @@ def create_raw_data():
     # 只保留2024年9月1日及以后的数据
     stock_data = stock_data[stock_data['date'] >= '20240901']
     # 根据st_stocks.xlsx去除所有st、*st股票
-    stock_data = filter_st_stocks(stock_data)
+    stock_data = filter_st_stocks(stock_data, st_file='st_stocks.xlsx')
     print("筛选后数据维度:", stock_data.shape)
     return stock_data
 
 def main():
-    model_path = 'xgb_model.json'
-    scaler_path = 'xgb_scaler.pkl'
-    lgb_model_path = 'lgb_model.txt'
-    lgb_scaler_path = 'lgb_scaler.pkl'
+    model_path = os.path.join(MODELS_DIR, 'xgb_model.json')
+    scaler_path = os.path.join(MODELS_DIR, 'xgb_scaler.pkl')
+    lgb_model_path = os.path.join(MODELS_DIR, 'lgb_model.txt')
+    lgb_scaler_path = os.path.join(MODELS_DIR, 'lgb_scaler.pkl')
     # --- 1. 数据加载与初步处理 ---
     stock_data = load_or_create('1_raw_data.csv', create_raw_data)
     # --- 2. 特征工程与标签创建（增量式）---
-    tech_data = load_or_create_incremental('3_tech_data.csv', calculate_technical_features, stock_data, factor_switches=FACTOR_SWITCHES)
+    tech_data = load_or_create_incremental('2_tech_data.csv', calculate_technical_features, stock_data, factor_switches=FACTOR_SWITCHES)
     # --- 3. 创建目标标签 ---
     print("创建目标标签...")
     labeled_data = create_target(tech_data)
@@ -675,7 +687,7 @@ def main():
     print('dropna前样本数:', labeled_data.shape)
     labeled_data = labeled_data.dropna(subset=['close', 'volume', 'target'])
     print('dropna后样本数:', labeled_data.shape)
-    labeled_data.to_csv('4_labeled_data.csv', index=False, encoding='utf-8-sig')
+    labeled_data.to_csv('3_labeled_data.csv', index=False, encoding='utf-8-sig')
     # --- 4. 模型训练与预测 ---
     train_data = labeled_data[labeled_data['ts_code'].str[2:5].isin(['300', '301'])].copy()
     train_data = train_data.sort_values('date')
