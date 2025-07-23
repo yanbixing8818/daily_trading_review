@@ -217,9 +217,13 @@ def chip_stability(close_series, days=20):
 
 # 统一因子开关配置
 FACTOR_SWITCHES = {
-    'dde_net_large_order_volume': True,
-    'pct_chg': True,
-    'amplitude': True,
+    'DDE_NET_LARGE_ORDER_VOLUME': True,
+    'PCT_CHG': True,
+    'AMPLITUDE': True,
+    'NEW_HIGH': True,
+    'RSI': True,
+    'MACD_CROSS': True,
+    'BBI': True,
     # 如需添加更多因子，继续补充
 }
 
@@ -261,7 +265,7 @@ def calculate_technical_features(df, high_window=60, vol_window=20, ma_window=60
             df.loc[idx, 'volume_ratio'] = np.nan
         
         # DDE大单净量
-        if factor_switches.get('dde_net_large_order_volume', False):
+        if factor_switches.get('DDE_NET_LARGE_ORDER_VOLUME', False):
             try:
                 minute_reader = Reader.factory(market='std', tdxdir=TDX_PATH)
                 min1_df = minute_reader.minute(symbol=code)
@@ -299,17 +303,37 @@ def calculate_technical_features(df, high_window=60, vol_window=20, ma_window=60
         macd, macdsignal, _ = talib.MACD(close)
         df.loc[idx, 'macd'] = macd
         df.loc[idx, 'signal'] = macdsignal
-        df.loc[idx, 'MACD_Signal'] = macdsignal
+        # MACD金叉/死叉信号
+        if factor_switches.get('MACD_CROSS', True):
+            df.loc[idx, 'macd_golden_cross_signal'] = ((pd.Series(macd).shift(1) < pd.Series(macdsignal).shift(1)) & (macd >= macdsignal)).astype(int)
+            df.loc[idx, 'macd_dead_cross_signal'] = ((pd.Series(macd).shift(1) > pd.Series(macdsignal).shift(1)) & (macd <= macdsignal)).astype(int)
+        else:
+            df.loc[idx, 'macd_golden_cross_signal'] = np.nan
+            df.loc[idx, 'macd_dead_cross_signal'] = np.nan
         
         # RSI
-        df.loc[idx, 'rsi'] = talib.RSI(close, timeperiod=14)
-        df.loc[idx, 'RSI_14'] = talib.RSI(close, timeperiod=14)
+        # 新增RSI6、RSI12及其比较因子
+        if factor_switches.get('RSI', True):
+            df.loc[idx, 'RSI_6'] = talib.RSI(close, timeperiod=6)
+            df.loc[idx, 'RSI_12'] = talib.RSI(close, timeperiod=12)
+            df.loc[idx, 'rsi6_ge_rsi12'] = (df.loc[idx, 'RSI_6'] >= df.loc[idx, 'RSI_12']).astype(int)
+        else:
+            df.loc[idx, 'RSI_6'] = np.nan
+            df.loc[idx, 'RSI_12'] = np.nan
+            df.loc[idx, 'rsi6_ge_rsi12'] = np.nan
         
         # 布林带
         upper, middle, lower = talib.BBANDS(close, timeperiod=20)
         df.loc[idx, 'boll_upper'] = upper
         df.loc[idx, 'boll_mid'] = middle
         df.loc[idx, 'boll_lower'] = lower
+        
+        # BBI（多空分界线）
+        if factor_switches.get('BBI', True):
+            bbi = (talib.MA(close, 5) + talib.MA(close, 10) + talib.MA(close, 20) + talib.MA(close, 40)) / 4
+            df.loc[idx, 'BBI5'] = bbi
+        else:
+            df.loc[idx, 'BBI5'] = np.nan
         
         # 筹码相关
         close_series = pd.Series(close)
@@ -324,7 +348,7 @@ def calculate_technical_features(df, high_window=60, vol_window=20, ma_window=60
                 df.loc[idx, f'volume_lag{i}'] = pd.Series(volume).shift(i).values
         
         # 新增：3日、5日、10日涨幅
-        if factor_switches.get('pct_chg', True):
+        if factor_switches.get('PCT_CHG', True):
             df.loc[idx, 'pct_chg_3d'] = pd.Series(close).pct_change(3).values
             df.loc[idx, 'pct_chg_5d'] = pd.Series(close).pct_change(5).values
             df.loc[idx, 'pct_chg_10d'] = pd.Series(close).pct_change(10).values
@@ -334,7 +358,7 @@ def calculate_technical_features(df, high_window=60, vol_window=20, ma_window=60
             df.loc[idx, 'pct_chg_10d'] = np.nan
             
         # 新增：3日、5日、10日震荡因子（振幅）
-        if factor_switches.get('amplitude', True):
+        if factor_switches.get('AMPLITUDE', True):
             df.loc[idx, 'amplitude_3d'] = (group['high'].rolling(3).max() - group['low'].rolling(3).min()) / group['low'].rolling(3).min()
             df.loc[idx, 'amplitude_5d'] = (group['high'].rolling(5).max() - group['low'].rolling(5).min()) / group['low'].rolling(5).min()
             df.loc[idx, 'amplitude_10d'] = (group['high'].rolling(10).max() - group['low'].rolling(10).min()) / group['low'].rolling(10).min()
@@ -345,7 +369,14 @@ def calculate_technical_features(df, high_window=60, vol_window=20, ma_window=60
 
     # 2. 形态信号特征 (在所有基础指标计算后进行)
     # 新高
-    df['is_new_high'] = (df['close'] == df.groupby('ts_code')['close'].transform(lambda x: x.rolling(high_window, min_periods=1).max())).astype(int)
+    
+    # 新增：10日新高因子
+    if factor_switches.get('NEW_HIGH', True):
+        df['is_new_high'] = (df['close'] == df.groupby('ts_code')['close'].transform(lambda x: x.rolling(high_window, min_periods=1).max())).astype(int)
+        df['is_new_high_10d'] = (df['close'] == df.groupby('ts_code')['close'].transform(lambda x: x.rolling(10, min_periods=1).max())).astype(int)
+    else:
+        df['is_new_high'] = np.nan
+        df['is_new_high_10d'] = np.nan
     # 均线多头排列
     df['multi_ma'] = ((df['ma5'] > df['ma10']) & (df['ma10'] > df['ma20']) & (df['ma20'] > df['ma60'])).astype(int)
     # 放量突破60日线
@@ -369,15 +400,18 @@ def feature_selection(df):
     features = [
         'open', 'high', 'low', 'close', 'volume', 'amount',
         '市值', '市值_log', '量价比',
-        'ma5', 'ma10', 'ma20', 'ma60', 'macd', 'signal', 'MACD_Signal', 'rsi', 'RSI_14',
+        'ma5', 'ma10', 'ma20', 'ma60', 'macd', 'signal',
+        'RSI_6', 'RSI_12', 'rsi6_ge_rsi12',
+        'macd_golden_cross_signal', 'macd_dead_cross_signal',
+        'BBI5',  # 新增BBI因子
         'boll_mid', 'boll_upper', 'boll_lower',
         'chip_bottom_ratio_20d', 'chip_top_ratio_20d', 'chip_stability_20d',
         'pct_chg_3d', 'pct_chg_5d', 'pct_chg_10d',
-        'amplitude_3d', 'amplitude_5d', 'amplitude_10d',  # 新增震荡因子
+        'amplitude_3d', 'amplitude_5d', 'amplitude_10d',
         'close_lag1', 'close_lag2', 'close_lag3',
         'volume_lag1', 'volume_lag2', 'volume_lag3',
         # 新增的形态特征
-        'is_new_high', 'multi_ma', 'ma60_cross', 'vol_break',
+        'is_new_high', 'is_new_high_10d', 'multi_ma', 'ma60_cross', 'vol_break',
         # 新增换手率
         'turnover_rate',
         # 新增DDE大单净量
