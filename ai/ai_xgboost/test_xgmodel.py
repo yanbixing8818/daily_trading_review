@@ -502,6 +502,32 @@ def load_or_create(path, create_func, *args, **kwargs):
         df.to_csv(path, index=False, encoding='utf-8-sig')
         return df
 
+def load_or_create_incremental(path, create_func, raw_data, *args, **kwargs):
+    """
+    增量式加载或创建技术指标数据。
+    只对新增的原始数据行进行特征计算，并追加到已有文件。
+    """
+    if os.path.exists(path):
+        print(f'已加载 {os.path.basename(path)}，将进行增量更新')
+        tech_data = pd.read_csv(path)
+        # 标识已处理过的 ts_code+date
+        processed = set(zip(tech_data['ts_code'], tech_data['date']))
+        # 找出未处理过的原始数据
+        new_rows = raw_data[~raw_data.set_index(['ts_code', 'date']).index.isin(processed)]
+        if not new_rows.empty:
+            print(f'发现新增数据 {len(new_rows)} 条，正在增量计算...')
+            new_tech = create_func(new_rows, *args, **kwargs)
+            tech_data = pd.concat([tech_data, new_tech], ignore_index=True)
+            tech_data.to_csv(path, index=False, encoding='utf-8-sig')
+        else:
+            print('没有新增数据，无需更新。')
+        return tech_data
+    else:
+        print(f'未发现 {os.path.basename(path)}，将全量生成...')
+        tech_data = create_func(raw_data, *args, **kwargs)
+        tech_data.to_csv(path, index=False, encoding='utf-8-sig')
+        return tech_data
+
 def create_raw_data():
     print("获取本地通达信股票列表...")
     stock_list = get_stock_list()
@@ -531,8 +557,8 @@ def main():
     # --- 1. 数据加载与初步处理 ---
     stock_data = load_or_create('1_raw_data.csv', create_raw_data)
     
-    # --- 2. 特征工程与标签创建 ---
-    tech_data = load_or_create('3_tech_data.csv', calculate_technical_features, stock_data)
+    # --- 2. 特征工程与标签创建（增量式）---
+    tech_data = load_or_create_incremental('3_tech_data.csv', calculate_technical_features, stock_data)
     
     # --- 3. 创建目标标签 ---
     print("创建目标标签...")
