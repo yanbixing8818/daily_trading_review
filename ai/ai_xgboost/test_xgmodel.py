@@ -18,6 +18,8 @@ from mootdx.affair import Affair
 import csv
 from sklearn.impute import SimpleImputer
 import pickle
+import lightgbm as lgb
+from sklearn.metrics import roc_auc_score
 
 matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
 matplotlib.rcParams['axes.unicode_minus'] = False
@@ -257,10 +259,10 @@ def calculate_technical_features(df, high_window=60, vol_window=20, ma_window=60
         else:
             df.loc[idx, 'turnover_rate'] = np.nan
         
-        # 量比 = 当日成交量 / (前5日平均成交量/240)   ！！！！！！！！这里需要考虑涨停板对于量能的影响情况！！！！！！！
+        # 量比 = 当日成交量 / (前5日平均成交量)   ！！！！！！！！这里需要考虑涨停板对于量能的影响情况！！！！！！！
         if 'volume' in group.columns and len(group) > 5:
             avg_5d_vol = pd.Series(group['volume']).rolling(5).mean()
-            df.loc[idx, 'volume_ratio'] = group['volume'] / (avg_5d_vol / 240)
+            df.loc[idx, 'volume_ratio'] = group['volume'] / (avg_5d_vol)
         else:
             df.loc[idx, 'volume_ratio'] = np.nan
         
@@ -420,38 +422,31 @@ def feature_selection(df):
     features = [f for f in features if f in df.columns]
     return features
 
-def train_or_load_model(X, y, features, sample_weight, model_path='xgb_model.json', scaler_path='scaler.pkl'):
+def train_xgb(X, y, features, sample_weight, model_path='xgb_model.json', scaler_path='xgb_scaler.pkl'):
     """加载或训练XGBoost模型"""
     if os.path.exists(model_path) and os.path.exists(scaler_path):
-        print('已加载模型和scaler')
-        model = xgb.Booster()
-        model.load_model(model_path)
-        scaler = joblib.load(scaler_path)
+        print('已加载XGBoost模型和scaler')
+        xgb_model = xgb.Booster()
+        xgb_model.load_model(model_path)
+        xgb_scaler = joblib.load(scaler_path)
     else:
-        print('开始训练新模型...')
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
+        print('开始训练新XGBoost模型...')
+        xgb_scaler = StandardScaler()
+        X_scaled = xgb_scaler.fit_transform(X)
         X = pd.DataFrame(X_scaled, columns=features, index=X.index)
-        
         tscv = TimeSeriesSplit(n_splits=5)
         best_model = None
-        
         for fold, (train_index, test_index) in enumerate(tscv.split(X)):
             print(f"Fold {fold+1}")
             X_train, X_test = X.iloc[train_index], X.iloc[test_index]
             y_train, y_test = y.iloc[train_index], y.iloc[test_index]
-            
-            # 获取对应权重
             weight_train = sample_weight.iloc[train_index]
             weight_test = sample_weight.iloc[test_index]
-
             dtrain = xgb.DMatrix(X_train, label=y_train, weight=weight_train)
             dtest = xgb.DMatrix(X_test, label=y_test, weight=weight_test)
-            
             pos_count = sum(y_train == 1)
             neg_count = sum(y_train == 0)
             scale_pos_weight = neg_count / pos_count if pos_count > 0 else 1.0
-            
             params = {
                 'objective': 'binary:logistic',
                 'eval_metric': 'auc',
@@ -462,34 +457,82 @@ def train_or_load_model(X, y, features, sample_weight, model_path='xgb_model.jso
                 'colsample_bytree': 0.8,
                 'seed': 42
             }
-            
-            model = xgb.train(
+            xgb_model = xgb.train(
                 params, dtrain, num_boost_round=1000,
                 evals=[(dtrain, 'train'), (dtest, 'eval')],
                 early_stopping_rounds=30,
                 verbose_eval=50
             )
-            
-            score = model.get_score(importance_type='weight')
+            score = xgb_model.get_score(importance_type='weight')
             print('特征重要性字典:', score)
             if not score:
                 print('警告：模型未能分裂出有效特征，可能是样本太少或特征无效。')
-            
             if fold == tscv.n_splits - 1:
                 if score:
-                    xgb.plot_importance(model, max_num_features=15)
+                    xgb.plot_importance(xgb_model, max_num_features=15)
                     plt.tight_layout()
-                    plt.savefig('feature_importance.png')
+                    plt.savefig('xgb_feature_importance.png')
                     plt.close()
-                    print('特征重要性已保存为 feature_importance.png')
-                best_model = model
-        
+                    print('XGBoost特征重要性已保存为 xgb_feature_importance.png')
+                best_model = xgb_model
         best_model.save_model(model_path)
-        joblib.dump(scaler, scaler_path)
-        print(f'新模型和scaler已保存')
-        model = best_model
-        
-    return model, scaler
+        joblib.dump(xgb_scaler, scaler_path)
+        print(f'新XGBoost模型和scaler已保存')
+        xgb_model = best_model
+    return xgb_model, xgb_scaler
+
+def train_lightgbm(X, y, features, sample_weight, model_path='lgb_model.txt', scaler_path='lgb_scaler.pkl'):
+    if os.path.exists(model_path) and os.path.exists(scaler_path):
+        print('已加载LightGBM模型和scaler')
+        lgb_model = lgb.Booster(model_file=model_path)
+        lgb_scaler = joblib.load(scaler_path)
+    else:
+        print('开始训练LightGBM新模型...')
+        lgb_scaler = StandardScaler()
+        X_scaled = lgb_scaler.fit_transform(X)
+        X = pd.DataFrame(X_scaled, columns=features, index=X.index)
+        lgb_train = lgb.Dataset(
+            X, label=y,
+            weight=sample_weight,
+            free_raw_data=False
+        )
+        pos_count = sum(y == 1)
+        neg_count = sum(y == 0)
+        scale_pos_weight = neg_count / pos_count if pos_count > 0 else 1.0
+        params = {
+            'objective': 'binary',
+            'metric': 'auc',
+            'reg_lambda': 1,
+            'deterministic': True,
+            'scale_pos_weight': 20,
+            'feature_pre_filter': False
+        }
+        lgb_model = lgb.train(params, lgb_train, num_boost_round=1000)
+        lgb_model.save_model(model_path)
+        joblib.dump(lgb_scaler, scaler_path)
+        print('LightGBM模型和scaler已保存')
+        importances = lgb_model.feature_importance(importance_type='gain')
+        feature_names = np.array(features)
+        df_imp = pd.DataFrame({'feature': feature_names, 'importance': importances})
+        df_imp = df_imp[df_imp['importance'] > 0].sort_values('importance', ascending=True)  # 横向条形图从下到上
+        plt.figure(figsize=(10, 6))
+        plt.barh(df_imp['feature'], df_imp['importance'])
+        plt.xlabel('Importance')
+        plt.ylabel('Feature name')
+        plt.title('LightGBM Feature Importance')
+        plt.tight_layout()
+        plt.savefig('lgb_feature_importance.png')
+        plt.close()
+        print('LightGBM特征重要性已保存为 lgb_feature_importance.png')
+    return lgb_model, lgb_scaler
+
+# 融合预测函数
+def fused_predict(xgb_model, lgb_model, scaler, data, features, xgb_weight=0.5, lgb_weight=0.5):
+    features_scaled = scaler.transform(data[features])
+    dmatrix = xgb.DMatrix(features_scaled, feature_names=features)
+    xgb_proba = xgb_model.predict(dmatrix)
+    lgb_proba = lgb_model.predict(features_scaled)
+    return xgb_weight * xgb_proba + lgb_weight * lgb_proba
 
 def predict_and_show_results(model, scaler, labeled_data, features):
     """使用模型进行预测并显示结果"""
@@ -617,41 +660,79 @@ def create_raw_data():
 
 def main():
     model_path = 'xgb_model.json'
-    scaler_path = 'scaler.pkl'
-    
+    scaler_path = 'xgb_scaler.pkl'
+    lgb_model_path = 'lgb_model.txt'
+    lgb_scaler_path = 'lgb_scaler.pkl'
     # --- 1. 数据加载与初步处理 ---
     stock_data = load_or_create('1_raw_data.csv', create_raw_data)
-    
     # --- 2. 特征工程与标签创建（增量式）---
     tech_data = load_or_create_incremental('3_tech_data.csv', calculate_technical_features, stock_data, factor_switches=FACTOR_SWITCHES)
-    
     # --- 3. 创建目标标签 ---
     print("创建目标标签...")
     labeled_data = create_target(tech_data)
-    
-    # 使用更精确的dropna，只对特征列和目标列进行检查
     features_and_target = feature_selection(labeled_data) + ['target']
     print('特征列:', features_and_target)
     print('dropna前样本数:', labeled_data.shape)
-    labeled_data = labeled_data.dropna(subset=['close', 'volume', 'target'])  # 只对核心特征和target做dropna
+    labeled_data = labeled_data.dropna(subset=['close', 'volume', 'target'])
     print('dropna后样本数:', labeled_data.shape)
     labeled_data.to_csv('4_labeled_data.csv', index=False, encoding='utf-8-sig')
-    
     # --- 4. 模型训练与预测 ---
-    # 使用所有创业板股票进行训练，不再进行额外的样本筛选
-    # 创业板股票筛选（ts_code以'300'或'301'开头）
     train_data = labeled_data[labeled_data['ts_code'].str[2:5].isin(['300', '301'])].copy()
-    
+    train_data = train_data.sort_values('date')
     print(f"用于训练的创业板样本数: {len(train_data)}")
     features = feature_selection(train_data)
     X = train_data[features]
     y = train_data['target']
     sample_weight = train_data['sample_weight']
-    
-    model, scaler = train_or_load_model(X, y, features, sample_weight, model_path=model_path, scaler_path=scaler_path)
-    
-    # --- 5. 结果展示 ---
-    predict_and_show_results(model, scaler, labeled_data, features)
+    X_train, X_val, y_train, y_val, sw_train, sw_val = train_test_split(X, y, sample_weight, test_size=0.2, random_state=42)
+    # XGBoost
+    xgb_model, xgb_scaler = train_xgb(X_train, y_train, features, sw_train, model_path=model_path, scaler_path=scaler_path)
+    # LightGBM
+    lgb_model, lgb_scaler = train_lightgbm(X_train, y_train, features, sw_train, model_path=lgb_model_path, scaler_path=lgb_scaler_path)
+    # 计算AUC
+    dval = xgb.DMatrix(xgb_scaler.transform(X_val), feature_names=features)
+    xgb_val_proba = xgb_model.predict(dval)
+    lgb_val_proba = lgb_model.predict(lgb_scaler.transform(X_val))
+    xgb_val_auc = roc_auc_score(y_val, xgb_val_proba)
+    lgb_val_auc = roc_auc_score(y_val, lgb_val_proba)
+    print(f"XGBoost验证集AUC: {xgb_val_auc:.4f}")
+    print(f"LightGBM验证集AUC: {lgb_val_auc:.4f}")
+    if (xgb_val_auc + lgb_val_auc) > 0:
+        xgb_weight = xgb_val_auc / (xgb_val_auc + lgb_val_auc)
+        lgb_weight = 1 - xgb_weight
+    else:
+        xgb_weight = 0.5
+        lgb_weight = 0.5
+    print(f"融合权重: XGBoost={xgb_weight:.2f}, LightGBM={lgb_weight:.2f}")
+    # --- 5. 结果展示（融合概率） ---
+    predict_date_str = datetime.datetime.now().strftime('%Y%m%d')
+    date_info_str = f"今日({predict_date_str})"
+    data_to_predict = labeled_data[(labeled_data['date'] == predict_date_str) & (labeled_data['ts_code'].str[2:5].isin(['300', '301']))]
+    if data_to_predict.empty:
+        predict_date_str = labeled_data['date'].max()
+        date_info_str = f"最新数据({predict_date_str})"
+        data_to_predict = labeled_data[(labeled_data['date'] == predict_date_str) & (labeled_data['ts_code'].str[2:5].isin(['300', '301']))]
+    if not data_to_predict.empty:
+        features_to_predict = data_to_predict[features]
+        features_scaled_xgb = xgb_scaler.transform(features_to_predict)
+        features_scaled_lgb = lgb_scaler.transform(features_to_predict)
+        dcurrent = xgb.DMatrix(features_scaled_xgb, feature_names=features)
+        xgb_proba = xgb_model.predict(dcurrent)
+        lgb_proba = lgb_model.predict(features_scaled_lgb)
+        fused_proba = xgb_weight * xgb_proba + lgb_weight * lgb_proba
+        data_to_predict = data_to_predict.assign(xgb_proba=xgb_proba, lgb_proba=lgb_proba, probability=fused_proba)
+        data_to_predict['预测明日大涨10%概率(%)'] = (data_to_predict['probability'] * 100).round(2)
+        selected = data_to_predict.nlargest(10, 'probability')
+        selected_xgb = data_to_predict.nlargest(10, 'xgb_proba')
+        selected_lgb = data_to_predict.nlargest(10, 'lgb_proba')
+        print(f"\n使用{date_info_str}预测，创业板明日大涨10%概率最高的股票（XGBoost）：")
+        print(selected_xgb[['ts_code', 'name', 'date', 'close', 'xgb_proba']])
+        print(f"\n使用{date_info_str}预测，创业板明日大涨10%概率最高的股票（LightGBM）：")
+        print(selected_lgb[['ts_code', 'name', 'date', 'close', 'lgb_proba']])
+        print(f"\n使用{date_info_str}预测，创业板明日大涨10%概率最高的股票（融合XGBoost+LightGBM）：")
+        print(selected[['ts_code', 'name', 'date', 'close', 'probability', '预测明日大涨10%概率(%)']])
+    else:
+        print("无数据可用于预测。")
 
 if __name__ == "__main__":
     main()
