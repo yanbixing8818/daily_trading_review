@@ -392,14 +392,30 @@ def calculate_technical_features(df, high_window=60, vol_window=20, ma_window=60
     
     return df
 
-def create_target(df, next_day_thresh=0.1, neg_weight=10.0):
-    """只创建目标标签和样本权重"""
+def is_zhangting(row, limit_rate=0.2, tol=0.003):
+    """
+    判断某一行日线数据是否涨停，排除一字涨停，允许一定容差。
+    """
+    if 'close' not in row or 'pre_close' not in row or 'open' not in row:
+        return False
+    if pd.isna(row['close']) or pd.isna(row['pre_close']) or pd.isna(row['open']):
+        return False
+    zt_price = row['pre_close'] * (1 + limit_rate)
+    # 涨停且不是一字涨停（开盘价!=收盘价），允许一定容差
+    return (row['close'] >= zt_price - tol) and not (abs(row['open'] - row['close']) < 1e-6 and abs(row['open'] - zt_price) < 1e-6)
+
+def create_target(df, next_day_thresh=0.1, neg_weight=10.0, zhangting_weight=2.0):
+    """只创建目标标签和样本权重，涨停样本赋予更高权重"""
     df = df.copy()
     df['next_day_return'] = df.groupby('ts_code')['close'].transform(lambda x: x.shift(-1) / x - 1)
     df['target'] = (df['next_day_return'] >= next_day_thresh).astype(int)
     # 增加负样本权重：对跌幅>7%的样本赋予更高权重
     df['sample_weight'] = 1.0
     df.loc[df['next_day_return'] <= -0.07, 'sample_weight'] = neg_weight
+    # 对于涨停样本赋予更高权重（默认2.0）
+    if 'close' in df.columns and 'pre_close' in df.columns:
+        is_zt = df.apply(lambda row: is_zhangting(row), axis=1)
+        df.loc[is_zt, 'sample_weight'] = zhangting_weight
     return df
 
 def feature_selection(df):
