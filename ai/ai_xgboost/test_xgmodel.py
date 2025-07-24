@@ -412,15 +412,23 @@ def is_zhangting(row, limit_rate=0.2, tol=0.003):
     # 涨停且不是一字涨停（开盘价!=收盘价），允许一定容差
     return (row['close'] >= zt_price - tol) and not (abs(row['open'] - row['close']) < 1e-6 and abs(row['open'] - zt_price) < 1e-6)
 
-def create_target(df, next_day_thresh=0.1, neg_weight=10.0, zhangting_weight=2.0):
-    """只创建目标标签和样本权重，涨停样本赋予更高权重"""
+def create_target(df, next_day_thresh=0.1, neg_weight=10.0, zhangting_weight=10.0, chonggao_weight=10.0):
+    """只创建目标标签和样本权重，涨停样本赋予更高权重，冲高回落样本也赋予高权重"""
     df = df.copy()
+    # 明日收盘涨跌幅
     df['next_day_return'] = df.groupby('ts_code')['close'].transform(lambda x: x.shift(-1) / x - 1)
+    # 明日开盘涨跌幅
+    df['next_day_open_return'] = df.groupby('ts_code')['open'].transform(lambda x: x.shift(-1) / x - 1)
+    # 明日收盘涨跌幅（已算）
     df['target'] = (df['next_day_return'] >= next_day_thresh).astype(int)
-    # 增加负样本权重：对跌幅>7%的样本赋予更高权重
-    df['sample_weight'] = 1.0
+    df['sample_weight'] = 5.0
+    # 1. 跌幅>7%高权重
     df.loc[df['next_day_return'] <= -0.07, 'sample_weight'] = neg_weight
-    # 对于涨停样本赋予更高权重（默认2.0）
+    # 2. 冲高回落高权重（如盘中回落超10%）
+    df['next_day_high_return'] = df.groupby('ts_code')['high'].transform(lambda x: x.shift(-1) / x - 1)
+    chonggao_mask = (df['next_day_high_return'] - df['next_day_return'] >= 0.10)
+    df.loc[chonggao_mask, 'sample_weight'] = chonggao_weight
+    # 3. 涨停高权重
     if 'close' in df.columns and 'pre_close' in df.columns:
         is_zt = df.apply(lambda row: is_zhangting(row), axis=1)
         df.loc[is_zt, 'sample_weight'] = zhangting_weight
