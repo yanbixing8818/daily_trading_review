@@ -310,12 +310,20 @@ def calculate_technical_features(df, high_window=60, vol_window=20, ma_window=60
         df.loc[idx, 'macd'] = macd
         df.loc[idx, 'signal'] = macdsignal
         # MACD金叉/死叉信号
-        if factor_switches.get('MACD_CROSS', True):
-            df.loc[idx, 'macd_golden_cross_signal'] = ((pd.Series(macd).shift(1) < pd.Series(macdsignal).shift(1)) & (macd >= macdsignal)).astype(int)
-            df.loc[idx, 'macd_dead_cross_signal'] = ((pd.Series(macd).shift(1) > pd.Series(macdsignal).shift(1)) & (macd <= macdsignal)).astype(int)
-        else:
-            df.loc[idx, 'macd_golden_cross_signal'] = np.nan
-            df.loc[idx, 'macd_dead_cross_signal'] = np.nan
+        golden_cross = ((pd.Series(macd).shift(1) < pd.Series(macdsignal).shift(1)) & (macd >= macdsignal)).astype(int)
+        dead_cross = ((pd.Series(macd).shift(1) > pd.Series(macdsignal).shift(1)) & (macd <= macdsignal)).astype(int)
+        df.loc[idx, 'macd_golden_cross_signal'] = golden_cross
+        df.loc[idx, 'macd_dead_cross_signal'] = dead_cross
+        # 金叉区间信号：金叉后到死叉前都为1
+        zone = np.zeros_like(macd, dtype=int)
+        in_zone = False
+        for i in range(len(macd)):
+            if golden_cross.iloc[i]:
+                in_zone = True
+            if dead_cross.iloc[i]:
+                in_zone = False
+            zone[i] = int(in_zone)
+        df.loc[idx, 'macd_golden_cross_zone'] = zone
         
         # RSI
         # 新增RSI6、RSI12及其比较因子
@@ -424,8 +432,8 @@ def feature_selection(df):
         '市值', '市值_log', '量价比',
         'ma5', 'ma10', 'ma20', 'ma60', 'macd', 'signal',
         'RSI_6', 'RSI_12', 'rsi6_ge_rsi12',
-        'macd_golden_cross_signal', 'macd_dead_cross_signal',
-        'BBI5',  # 新增BBI因子
+        'macd_golden_cross_zone',  # 只保留金叉区间信号
+        'BBI5',
         'boll_mid', 'boll_upper', 'boll_lower',
         'chip_bottom_ratio_20d', 'chip_top_ratio_20d', 'chip_stability_20d',
         'pct_chg_3d', 'pct_chg_5d', 'pct_chg_10d',
