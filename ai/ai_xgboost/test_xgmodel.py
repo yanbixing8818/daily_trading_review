@@ -233,6 +233,26 @@ FACTOR_SWITCHES = {
     # 如需添加更多因子，继续补充
 }
 
+def add_sentiment_features(df):
+    """添加市场情绪特征"""
+    # 先确保有is_zhangting列
+    if 'is_zhangting' not in df.columns:
+        # 动态生成is_zhangting列
+        df['is_zhangting'] = df.apply(lambda row: is_zhangting(row), axis=1)
+    # 涨停家数占比
+    df['zt_ratio'] = df.groupby('date')['is_zhangting'].transform('mean')
+    # 连板高度（近5日内连续涨停天数，0为非连板，1为1板，2为2连板...）
+    def calc_lianban_height(s):
+        cnt = 0
+        for v in reversed(s):
+            if v:
+                cnt += 1
+            else:
+                break
+        return cnt
+    df['lianban_height'] = df.groupby('ts_code')['is_zhangting'].transform(lambda x: x.rolling(5, min_periods=1).apply(calc_lianban_height, raw=True))
+    return df
+
 def calculate_technical_features(df, high_window=60, vol_window=20, ma_window=60, vol_ratio=1.5, factor_switches=None):
     """预处理数据，并计算所有技术指标和形态特征"""
     if factor_switches is None:
@@ -290,12 +310,17 @@ def calculate_technical_features(df, high_window=60, vol_window=20, ma_window=60
                             df.at[i, 'dde_net_large_order_volume'] = dde_value
                         else:
                             df.at[i, 'dde_net_large_order_volume'] = np.nan
+                        # 新增主力强度指标
+                        df.at[i, 'main_strength'] = (buy_vol - sell_vol) / (buy_vol + sell_vol + 1e-6)
                 else:
                     df.loc[idx, 'dde_net_large_order_volume'] = np.nan
+                    df.loc[idx, 'main_strength'] = np.nan
             except Exception as e:
                 df.loc[idx, 'dde_net_large_order_volume'] = np.nan
+                df.loc[idx, 'main_strength'] = np.nan
         else:
             df.loc[idx, 'dde_net_large_order_volume'] = np.nan
+            df.loc[idx, 'main_strength'] = np.nan
 
         close = group['close'].values
         volume = group['volume'].values if 'volume' in group.columns else None
@@ -398,6 +423,8 @@ def calculate_technical_features(df, high_window=60, vol_window=20, ma_window=60
     df['vol_ma20'] = df.groupby('ts_code')['volume'].transform(lambda x: x.rolling(vol_window).mean())
     df['vol_break'] = (df['volume'] > df['vol_ma20'] * vol_ratio).astype(int)
     
+    # 添加市场情绪特征
+    df = add_sentiment_features(df)
     return df
 
 def is_zhangting(row, limit_rate=0.2, tol=0.003):
@@ -453,7 +480,10 @@ def feature_selection(df):
         # 新增换手率
         'turnover_rate',
         # 新增DDE大单净量
-        'dde_net_large_order_volume'
+        'dde_net_large_order_volume',
+        'main_strength',
+        # 新增市场情绪特征
+        'zt_ratio', 'lianban_height'
     ]
     features = [f for f in features if f in df.columns]
     return features
@@ -535,39 +565,46 @@ def train_lightgbm(X, y, features, sample_weight, model_path=None, scaler_path=N
         lgb_scaler = StandardScaler()
         X_scaled = lgb_scaler.fit_transform(X)
         X = pd.DataFrame(X_scaled, columns=features, index=X.index)
-        lgb_train = lgb.Dataset(
-            X, label=y,
-            weight=sample_weight,
-            free_raw_data=False
-        )
-        pos_count = sum(y == 1)
-        neg_count = sum(y == 0)
-        scale_pos_weight = neg_count / pos_count if pos_count > 0 else 1.0
-        params = {
-            'objective': 'binary',
-            'metric': 'auc',
-            'reg_lambda': 1,
-            'deterministic': True,
-            'scale_pos_weight': 20,
-            'feature_pre_filter': False
-        }
-        lgb_model = lgb.train(params, lgb_train, num_boost_round=1000)
-        lgb_model.save_model(model_path)
+        tscv = TimeSeriesSplit(n_splits=5)
+        best_model = None
+        for fold, (train_index, test_index) in enumerate(tscv.split(X)):
+            print(f"LightGBM Fold {fold+1}")
+            X_train, X_test = X.iloc[train_index], X.iloc[test_index]
+            y_train, y_test = y.iloc[train_index], y.iloc[test_index]
+            weight_train = sample_weight.iloc[train_index]
+            weight_test = sample_weight.iloc[test_index]
+            lgb_train = lgb.Dataset(X_train, label=y_train, weight=weight_train, free_raw_data=False)
+            lgb_eval = lgb.Dataset(X_test, label=y_test, weight=weight_test, free_raw_data=False)
+            pos_count = sum(y_train == 1)
+            neg_count = sum(y_train == 0)
+            scale_pos_weight = neg_count / pos_count if pos_count > 0 else 1.0
+            params = {
+                'objective': 'binary',
+                'metric': 'auc',
+                'reg_lambda': 1,
+                'deterministic': True,
+                'scale_pos_weight': 20,
+                'feature_pre_filter': False
+            }
+            lgb_model = lgb.train(params, lgb_train, num_boost_round=1000, valid_sets=[lgb_train, lgb_eval])
+            importances = lgb_model.feature_importance(importance_type='gain')
+            feature_names = np.array(features)
+            df_imp = pd.DataFrame({'feature': feature_names, 'importance': importances})
+            df_imp = df_imp[df_imp['importance'] > 0].sort_values('importance', ascending=True)
+            plt.figure(figsize=(10, 6))
+            plt.barh(df_imp['feature'], df_imp['importance'])
+            plt.xlabel('Importance')
+            plt.ylabel('Feature name')
+            plt.title(f'LightGBM Feature Importance Fold {fold+1}')
+            plt.tight_layout()
+            plt.savefig(f'lgb_feature_importance_fold{fold+1}.png')
+            plt.close()
+            print(f'LightGBM特征重要性已保存为 lgb_feature_importance_fold{fold+1}.png')
+            if fold == tscv.n_splits - 1:
+                best_model = lgb_model
+        best_model.save_model(model_path)
         joblib.dump(lgb_scaler, scaler_path)
         print('LightGBM模型和scaler已保存')
-        importances = lgb_model.feature_importance(importance_type='gain')
-        feature_names = np.array(features)
-        df_imp = pd.DataFrame({'feature': feature_names, 'importance': importances})
-        df_imp = df_imp[df_imp['importance'] > 0].sort_values('importance', ascending=True)  # 横向条形图从下到上
-        plt.figure(figsize=(10, 6))
-        plt.barh(df_imp['feature'], df_imp['importance'])
-        plt.xlabel('Importance')
-        plt.ylabel('Feature name')
-        plt.title('LightGBM Feature Importance')
-        plt.tight_layout()
-        plt.savefig('lgb_feature_importance.png')
-        plt.close()
-        print('LightGBM特征重要性已保存为 lgb_feature_importance.png')
     return lgb_model, lgb_scaler
 
 # 融合预测函数
@@ -728,26 +765,42 @@ def main():
     X = train_data[features]
     y = train_data['target']
     sample_weight = train_data['sample_weight']
-    X_train, X_val, y_train, y_val, sw_train, sw_val = train_test_split(X, y, sample_weight, test_size=0.2, random_state=42)
+    # --- 严格时间序列验证集划分 ---
+    # n = len(train_data)
+    # split_idx = int(n * 0.8)
+    # X_train = X.iloc[:split_idx]
+    # X_val = X.iloc[split_idx:]
+    # y_train = y.iloc[:split_idx]
+    # y_val = y.iloc[split_idx:]
+    # sw_train = sample_weight.iloc[:split_idx]
+    # sw_val = sample_weight.iloc[split_idx:]
+    # 直接用全部数据训练，交叉验证在模型内部完成
+    X_train = X
+    y_train = y
+    sw_train = sample_weight
     # XGBoost
     xgb_model, xgb_scaler = train_xgb(X_train, y_train, features, sw_train, model_path=model_path, scaler_path=scaler_path)
     # LightGBM
     lgb_model, lgb_scaler = train_lightgbm(X_train, y_train, features, sw_train, model_path=lgb_model_path, scaler_path=lgb_scaler_path)
     # 计算AUC
-    dval = xgb.DMatrix(xgb_scaler.transform(X_val), feature_names=features)
-    xgb_val_proba = xgb_model.predict(dval)
-    lgb_val_proba = lgb_model.predict(lgb_scaler.transform(X_val))
-    xgb_val_auc = roc_auc_score(y_val, xgb_val_proba)
-    lgb_val_auc = roc_auc_score(y_val, lgb_val_proba)
-    print(f"XGBoost验证集AUC: {xgb_val_auc:.4f}")
-    print(f"LightGBM验证集AUC: {lgb_val_auc:.4f}")
-    if (xgb_val_auc + lgb_val_auc) > 0:
-        xgb_weight = xgb_val_auc / (xgb_val_auc + lgb_val_auc)
-        lgb_weight = 1 - xgb_weight
-    else:
-        xgb_weight = 0.5
-        lgb_weight = 0.5
-    print(f"融合权重: XGBoost={xgb_weight:.2f}, LightGBM={lgb_weight:.2f}")
+    # dval = xgb.DMatrix(xgb_scaler.transform(X_val), feature_names=features)
+    # xgb_val_proba = xgb_model.predict(dval)
+    # lgb_val_proba = lgb_model.predict(lgb_scaler.transform(X_val))
+    # xgb_val_auc = roc_auc_score(y_val, xgb_val_proba)
+    # lgb_val_auc = roc_auc_score(y_val, lgb_val_proba)
+    # print(f"XGBoost验证集AUC: {xgb_val_auc:.4f}")
+    # print(f"LightGBM验证集AUC: {lgb_val_auc:.4f}")
+    # if (xgb_val_auc + lgb_val_auc) > 0:
+    #     xgb_weight = xgb_val_auc / (xgb_val_auc + lgb_val_auc)
+    #     lgb_weight = 1 - xgb_weight
+    # else:
+    #     xgb_weight = 0.5
+    #     lgb_weight = 0.5
+    # print(f"融合权重: XGBoost={xgb_weight:.2f}, LightGBM={lgb_weight:.2f}")
+
+    xgb_weight = 0.5
+    lgb_weight = 0.5
+
     # --- 5. 结果展示（融合概率） ---
     predict_date_str = datetime.datetime.now().strftime('%Y%m%d')
     date_info_str = f"今日({predict_date_str})"
@@ -769,12 +822,19 @@ def main():
         selected = data_to_predict.nlargest(10, 'probability')
         selected_xgb = data_to_predict.nlargest(10, 'xgb_proba')
         selected_lgb = data_to_predict.nlargest(10, 'lgb_proba')
+        # 打印时添加主力强度和情绪热度
+        cols_base = ['ts_code', 'name', 'date', 'close']
+        cols_extra = []
+        if 'main_strength' in data_to_predict.columns:
+            cols_extra.append('main_strength')
+        if 'zt_ratio' in data_to_predict.columns:
+            cols_extra.append('zt_ratio')
         print(f"\n使用{date_info_str}预测，创业板明日大涨10%概率最高的股票（XGBoost）：")
-        print(selected_xgb[['ts_code', 'name', 'date', 'close', 'xgb_proba']])
+        print(selected_xgb[cols_base + ['xgb_proba'] + cols_extra])
         print(f"\n使用{date_info_str}预测，创业板明日大涨10%概率最高的股票（LightGBM）：")
-        print(selected_lgb[['ts_code', 'name', 'date', 'close', 'lgb_proba']])
+        print(selected_lgb[cols_base + ['lgb_proba'] + cols_extra])
         print(f"\n使用{date_info_str}预测，创业板明日大涨10%概率最高的股票（融合XGBoost+LightGBM）：")
-        print(selected[['ts_code', 'name', 'date', 'close', 'probability', '预测明日大涨10%概率(%)']])
+        print(selected[cols_base + ['probability', '预测明日大涨10%概率(%)'] + cols_extra])
     else:
         print("无数据可用于预测。")
 
