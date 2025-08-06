@@ -29,7 +29,7 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 logger = logging.getLogger(__name__)
 
 CONFIG = {
-    'tdx_path': '/mnt/c/new_tdx',      # 通达信数据目录
+    'tdx_path': 'C:/new_tdx',      # 通达信数据目录
     'model_dir': 'models',         # 模型保存目录
     'data_days': 60,               # 历史数据天数
     'test_size': 0.2,              # 测试集比例

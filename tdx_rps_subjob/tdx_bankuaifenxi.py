@@ -28,7 +28,7 @@ from mootdx.quotes import Quotes
 
 # 配置参数
 CONFIG = {
-    'tdx_path': '/mnt/c/new_tdx',  # 通达信安装路径
+    'tdx_path': 'C:/new_tdx',  # 通达信安装路径
     'output_file': 'top_plate_indices.csv',  # 输出文件名
     'plate_prefixes': ['880', '885', '886', '887', '399'],  # 板块指数前缀
     'days': 121,  # 分析

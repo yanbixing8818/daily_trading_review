@@ -26,7 +26,7 @@ matplotlib.rcParams['axes.unicode_minus'] = False
 from sklearn.model_selection import TimeSeriesSplit
 
 # 通达信数据目录（请根据实际情况修改）
-TDX_PATH = '/mnt/c/new_tdx'
+TDX_PATH = 'C:/new_tdx'
 # 统一base_data目录
 BASE_DATA_DIR = 'base_data'
 os.makedirs(BASE_DATA_DIR, exist_ok=True)
