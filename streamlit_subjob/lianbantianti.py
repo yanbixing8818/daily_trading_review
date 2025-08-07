@@ -9,11 +9,11 @@ import io
 from PIL import Image
 import akshare as ak
 
-st.set_page_config(
-        page_title="连板天梯",
-        page_icon="📊",
-        layout="wide"
-    )
+# st.set_page_config(
+#         page_title="连板天梯",
+#         page_icon="📊",
+#         layout="wide"
+#     )
 
 # 自动检测并设置可用的中文字体，防止中文缺字
 def set_chinese_font():

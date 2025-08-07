@@ -1,3 +1,6 @@
+# 这个检测，依赖于财务数据，需要先执行： python download_tdx_caiwu.py 来获取财务数据后再执行该程序。
+
+
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -39,7 +42,7 @@ def chip_stability(df, days=20):
     print(f"DEBUG chip_stability: bottom_ratio={bottom_ratio:.2f}, current_ratio={current_ratio:.2f}")
     return bottom_ratio > 0.65 and current_ratio < 0.21
 
-def detect_wash_and_distribute(stock_code, tdx_dir='C:/new_tdx', days=10):
+def detect_wash_and_distribute(stock_code, tdx_dir='E:/new_tdx', days=10):
     """
     检测股票前N个交易日的洗盘和出货信号（使用本地通达信数据）
     :param stock_code: 股票代码 (如 '600000')
@@ -156,71 +159,79 @@ def detect_wash_and_distribute(stock_code, tdx_dir='C:/new_tdx', days=10):
 
     return {'wash_dates': wash_dates, 'distribute_dates': distribute_dates}, df
 
-# Streamlit界面
-st.title('洗盘/出货信号检测')
+def app():
+    """Streamlit应用主函数"""
+    st.title('洗盘/出货信号检测')
 
-stock_code = st.text_input('请输入股票代码（如301176）:')
+    stock_code = st.text_input('请输入股票代码（如301176）:')
 
-# 增加按钮，只有点击后才计算
-if st.button('检测信号') and stock_code:
-    tdx_dir = '/mnt/c/new_tdx'
-    signals, df = detect_wash_and_distribute(stock_code, tdx_dir=tdx_dir, days=15)
-    st.write(f"股票 {stock_code} 检测结果：")
-    st.write(f"洗盘信号日期: {signals['wash_dates']}")
-    st.write(f"出货信号日期: {signals['distribute_dates']}")
-    st.table({
-        '洗盘信号日期': signals['wash_dates'],
-        '出货信号日期': signals['distribute_dates']
-    })
+    # 增加按钮，只有点击后才计算
+    if st.button('检测信号') and stock_code:
+        tdx_dir = 'E:/new_tdx'
+        signals, df = detect_wash_and_distribute(stock_code, tdx_dir=tdx_dir, days=15)
+        
+        if df is None:
+            st.error(f"无法获取股票 {stock_code} 的数据，请检查股票代码是否正确或通达信数据是否完整。")
+        else:
+            st.write(f"股票 {stock_code} 检测结果：")
+            st.write(f"洗盘信号日期: {signals['wash_dates']}")
+            st.write(f"出货信号日期: {signals['distribute_dates']}")
+            st.table({
+                '洗盘信号日期': signals['wash_dates'],
+                '出货信号日期': signals['distribute_dates']
+            })
 
-    # 标注信号
-    apds = []
-    # 只显示最近20天
-    df_plot = df.tail(20).copy()
-    # 洗盘信号
-    wash_y = pd.Series(np.nan, index=df_plot.index)
-    if signals['wash_dates']:
-        wash_mask = df_plot['date'].dt.strftime('%Y-%m-%d').isin(signals['wash_dates'])
-        wash_y[wash_mask] = df_plot.loc[wash_mask, 'low'] * 0.98
-        apds.append(mpf.make_addplot(wash_y, type='scatter', markersize=100, marker='^', color='blue'))
-    # 出货信号
-    dist_y = pd.Series(np.nan, index=df_plot.index)
-    if signals['distribute_dates']:
-        dist_mask = df_plot['date'].dt.strftime('%Y-%m-%d').isin(signals['distribute_dates'])
-        dist_y[dist_mask] = df_plot.loc[dist_mask, 'high'] * 1.02
-        apds.append(mpf.make_addplot(dist_y, type='scatter', markersize=100, marker='v', color='red'))
+            # 标注信号
+            apds = []
+            # 只显示最近20天
+            df_plot = df.tail(20).copy()
+            # 洗盘信号
+            wash_y = pd.Series(np.nan, index=df_plot.index)
+            if signals['wash_dates']:
+                wash_mask = df_plot['date'].dt.strftime('%Y-%m-%d').isin(signals['wash_dates'])
+                wash_y[wash_mask] = df_plot.loc[wash_mask, 'low'] * 0.98
+                apds.append(mpf.make_addplot(wash_y, type='scatter', markersize=100, marker='^', color='blue'))
+            # 出货信号
+            dist_y = pd.Series(np.nan, index=df_plot.index)
+            if signals['distribute_dates']:
+                dist_mask = df_plot['date'].dt.strftime('%Y-%m-%d').isin(signals['distribute_dates'])
+                dist_y[dist_mask] = df_plot.loc[dist_mask, 'high'] * 1.02
+                apds.append(mpf.make_addplot(dist_y, type='scatter', markersize=100, marker='v', color='red'))
 
-    # 绘制K线图到内存
-    if apds:
-        fig, axlist = mpf.plot(
-            df_plot.set_index('date'),
-            type='candle',
-            mav=(5, 10, 20),
-            addplot=apds,
-            returnfig=True,
-            figsize=(10, 6),
-            title=f"{stock_code} K线及信号"
-        )
-    else:
-        fig, axlist = mpf.plot(
-            df_plot.set_index('date'),
-            type='candle',
-            mav=(5, 10, 20),
-            returnfig=True,
-            figsize=(10, 6),
-            title=f"{stock_code} K线及信号"
-        )
-    # 在图片左上角添加图例说明
-    legend_text = (
-        "图例说明：\n"
-        "蓝线：5日均线\n"
-        "橙线：10日均线\n"
-        "紫线：20日均线\n"
-        "蓝色上三角：洗盘信号\n"
-        "红色下三角：出货信号"
-    )
-    fig.text(0.01, 0.99, legend_text, fontsize=12, color='black', ha='left', va='top', linespacing=1.5, bbox=dict(facecolor='white', alpha=0.7, edgecolor='none'))
-    buf = io.BytesIO()
-    fig.savefig(buf, format='png')
-    buf.seek(0)
-    st.image(buf, caption=f"{stock_code} K线及信号")
+            # 绘制K线图到内存
+            if apds:
+                fig, axlist = mpf.plot(
+                    df_plot.set_index('date'),
+                    type='candle',
+                    mav=(5, 10, 20),
+                    addplot=apds,
+                    returnfig=True,
+                    figsize=(10, 6),
+                    title=f"{stock_code} K线及信号"
+                )
+            else:
+                fig, axlist = mpf.plot(
+                    df_plot.set_index('date'),
+                    type='candle',
+                    mav=(5, 10, 20),
+                    returnfig=True,
+                    figsize=(10, 6),
+                    title=f"{stock_code} K线及信号"
+                )
+            # 在图片左上角添加图例说明
+            legend_text = (
+                "图例说明：\n"
+                "蓝线：5日均线\n"
+                "橙线：10日均线\n"
+                "紫线：20日均线\n"
+                "蓝色上三角：洗盘信号\n"
+                "红色下三角：出货信号"
+            )
+            fig.text(0.01, 0.99, legend_text, fontsize=12, color='black', ha='left', va='top', linespacing=1.5, bbox=dict(facecolor='white', alpha=0.7, edgecolor='none'))
+            buf = io.BytesIO()
+            fig.savefig(buf, format='png')
+            buf.seek(0)
+            st.image(buf, caption=f"{stock_code} K线及信号")
+
+if __name__ == "__main__":
+    app()

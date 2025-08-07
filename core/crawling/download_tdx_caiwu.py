@@ -68,7 +68,7 @@ def main():
 
     temp_download_dir = "temp_download"
     os.makedirs(temp_download_dir, exist_ok=True)
-    extract_path = r"/mnt/c/new_tdx/vipdoc/cw"
+    extract_path = r"E:/new_tdx/vipdoc/cw"
 
     for url in urls:
         filename = os.path.basename(url)

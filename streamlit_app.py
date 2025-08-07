@@ -6,15 +6,24 @@ import streamlit_subjob.longtouguzongkuo as ltgzk
 import streamlit_subjob.zhangdietingshuliang as zdtsl
 import streamlit_subjob.all_a_stock_data as aasd
 import streamlit_subjob.bankuairelitu as bkrlt
+import streamlit_subjob.is_washing_or_distributing as iwod
+
+st.set_page_config(
+        page_title="小闫量化",
+        page_icon="📊",
+        layout="wide"
+    )
+
 
 PAGES = {
     "主页": home,
     "A股市场数据": aasd,
-    "龙头股总括": ltgzk,
-    "涨停原因": ztyy,
-    "最高板分析": lbtt,
+    # "龙头股总括": ltgzk,
+    # "涨停原因": ztyy,
+    # "最高板分析": lbtt,
     "涨跌停数量分析": zdtsl,
     "7日板块涨跌幅": bkrlt,
+    "洗盘or出货判断": iwod,
     # "竞价分析": jingjiafenxi,
     # "个股分析": gegu,
     # "大盘分析": dapan,
