@@ -28,7 +28,7 @@ def is_invalid_date(val):
 # 初始化K线数据读取器（只初始化一次）
 @st.cache_resource
 def init_reader():
-    return Reader.factory(market='std', tdxdir='C:/new_tdx')  # 修改为您的通达信数据目录
+    return Reader.factory(market='std', tdxdir='E:/new_tdx')  # 修改为您的通达信数据目录
 
 def load_plate_rps_history():
     path = os.path.join(os.path.dirname(__file__), 'plate_rps_history.csv')
