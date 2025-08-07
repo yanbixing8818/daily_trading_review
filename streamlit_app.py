@@ -7,6 +7,7 @@ import streamlit_subjob.zhangdietingshuliang as zdtsl
 import streamlit_subjob.all_a_stock_data as aasd
 import streamlit_subjob.bankuairelitu as bkrlt
 import streamlit_subjob.is_washing_or_distributing as iwod
+import streamlit_subjob.sector_buy_point as sbp
 
 st.set_page_config(
         page_title="小闫量化",
@@ -24,6 +25,7 @@ PAGES = {
     "涨跌停数量分析": zdtsl,
     "7日板块涨跌幅": bkrlt,
     "洗盘or出货判断": iwod,
+    "板块买点信号": sbp,
     # "竞价分析": jingjiafenxi,
     # "个股分析": gegu,
     # "大盘分析": dapan,
