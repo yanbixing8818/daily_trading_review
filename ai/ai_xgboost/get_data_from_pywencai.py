@@ -35,7 +35,7 @@ if __name__ == "__main__":
             print(f"{trade_date} 非交易日，跳过。")
             continue
         date_str = trade_date.replace("年", "").replace("月", "").replace("日", "")
-        query = f"创业板,非st,{trade_date}竞价涨幅,{trade_date}竞价匹配价,竞价成交量,{trade_date}05:25分时换手率,{trade_date}05:25分时量比,{trade_date}竞价量，竞价金额, {trade_date}竞价未匹配量,{trade_date}竞价未匹配金额,竞价主力资金流向,{trade_date}流通市值竞价dde大单净额,竞价大单净额,竞价小单净额"
+        query = f"创业板,非st,{trade_date}竞价涨幅,{trade_date}竞价匹配价,竞价成交量,{trade_date}09:25分时换手率,{trade_date}09:25分时量比,{trade_date}竞价量，竞价金额, {trade_date}竞价未匹配量,{trade_date}竞价未匹配金额,竞价主力资金流向,{trade_date}流通市值竞价dde大单净额,竞价大单净额,竞价小单净额"
         data = pywencai.get(query=query, loop=True)
         
         # 保存结果
