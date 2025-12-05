@@ -508,12 +508,15 @@ def train_xgb(X, y, features, sample_weight, model_path=None, scaler_path=None):
         best_model = None
         for fold, (train_index, test_index) in enumerate(tscv.split(X)):
             print(f"Fold {fold+1}")
-            X_train, X_test = X.iloc[train_index], X.iloc[test_index]
+            # 每个fold使用独立的scaler
+            fold_scaler = StandardScaler().fit(X.iloc[train_index])
+            X_train_scaled = fold_scaler.transform(X.iloc[train_index])
+            X_test_scaled = fold_scaler.transform(X.iloc[test_index])
             y_train, y_test = y.iloc[train_index], y.iloc[test_index]
             weight_train = sample_weight.iloc[train_index]
             weight_test = sample_weight.iloc[test_index]
-            dtrain = xgb.DMatrix(X_train, label=y_train, weight=weight_train)
-            dtest = xgb.DMatrix(X_test, label=y_test, weight=weight_test)
+            dtrain = xgb.DMatrix(X_train_scaled, label=y_train, weight=weight_train)
+            dtest = xgb.DMatrix(X_test_scaled, label=y_test, weight=weight_test)
             pos_count = sum(y_train == 1)
             neg_count = sum(y_train == 0)
             scale_pos_weight = neg_count / pos_count if pos_count > 0 else 1.0
@@ -569,12 +572,15 @@ def train_lightgbm(X, y, features, sample_weight, model_path=None, scaler_path=N
         best_model = None
         for fold, (train_index, test_index) in enumerate(tscv.split(X)):
             print(f"LightGBM Fold {fold+1}")
-            X_train, X_test = X.iloc[train_index], X.iloc[test_index]
+            # 每个fold使用独立的scaler
+            fold_scaler = StandardScaler().fit(X.iloc[train_index])
+            X_train_scaled = fold_scaler.transform(X.iloc[train_index])
+            X_test_scaled = fold_scaler.transform(X.iloc[test_index])
             y_train, y_test = y.iloc[train_index], y.iloc[test_index]
             weight_train = sample_weight.iloc[train_index]
             weight_test = sample_weight.iloc[test_index]
-            lgb_train = lgb.Dataset(X_train, label=y_train, weight=weight_train, free_raw_data=False)
-            lgb_eval = lgb.Dataset(X_test, label=y_test, weight=weight_test, free_raw_data=False)
+            lgb_train = lgb.Dataset(X_train_scaled, label=y_train, weight=weight_train, free_raw_data=False)
+            lgb_eval = lgb.Dataset(X_test_scaled, label=y_test, weight=weight_test, free_raw_data=False)
             pos_count = sum(y_train == 1)
             neg_count = sum(y_train == 0)
             scale_pos_weight = neg_count / pos_count if pos_count > 0 else 1.0
@@ -765,15 +771,6 @@ def main():
     X = train_data[features]
     y = train_data['target']
     sample_weight = train_data['sample_weight']
-    # --- 严格时间序列验证集划分 ---
-    # n = len(train_data)
-    # split_idx = int(n * 0.8)
-    # X_train = X.iloc[:split_idx]
-    # X_val = X.iloc[split_idx:]
-    # y_train = y.iloc[:split_idx]
-    # y_val = y.iloc[split_idx:]
-    # sw_train = sample_weight.iloc[:split_idx]
-    # sw_val = sample_weight.iloc[split_idx:]
     # 直接用全部数据训练，交叉验证在模型内部完成
     X_train = X
     y_train = y
@@ -782,21 +779,7 @@ def main():
     xgb_model, xgb_scaler = train_xgb(X_train, y_train, features, sw_train, model_path=model_path, scaler_path=scaler_path)
     # LightGBM
     lgb_model, lgb_scaler = train_lightgbm(X_train, y_train, features, sw_train, model_path=lgb_model_path, scaler_path=lgb_scaler_path)
-    # 计算AUC
-    # dval = xgb.DMatrix(xgb_scaler.transform(X_val), feature_names=features)
-    # xgb_val_proba = xgb_model.predict(dval)
-    # lgb_val_proba = lgb_model.predict(lgb_scaler.transform(X_val))
-    # xgb_val_auc = roc_auc_score(y_val, xgb_val_proba)
-    # lgb_val_auc = roc_auc_score(y_val, lgb_val_proba)
-    # print(f"XGBoost验证集AUC: {xgb_val_auc:.4f}")
-    # print(f"LightGBM验证集AUC: {lgb_val_auc:.4f}")
-    # if (xgb_val_auc + lgb_val_auc) > 0:
-    #     xgb_weight = xgb_val_auc / (xgb_val_auc + lgb_val_auc)
-    #     lgb_weight = 1 - xgb_weight
-    # else:
-    #     xgb_weight = 0.5
-    #     lgb_weight = 0.5
-    # print(f"融合权重: XGBoost={xgb_weight:.2f}, LightGBM={lgb_weight:.2f}")
+
 
     xgb_weight = 0.5
     lgb_weight = 0.5

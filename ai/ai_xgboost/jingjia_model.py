@@ -13,7 +13,7 @@ matplotlib.rcParams['axes.unicode_minus'] = False
 import re
 import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from test_xgmodel import train_xgb, train_lightgbm
+from test_xgmodel import train_xgb, train_lightgbm, is_zhangting
 
 JINGJIA_BASE_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'jingjia_base_data')
 JINGJIA_FEATURES = [
@@ -148,7 +148,8 @@ def feature_selection_jingjia(df):
     print("数据清洗完成")
     return available_features, df_encoded
 
-def create_target(df, thresh=0.15):
+def create_target(df, thresh=0.15, neg_weight=10.0, zhangting_weight=10.0, chonggao_weight=10.0):
+    """创建目标标签和样本权重，涨停样本和冲高回落样本赋予高权重"""
     df = df.copy()
     # 目标设定为：当日收盘价相对于昨日收盘价涨幅>=15%为正样本
     if '收盘价' in df.columns:
@@ -157,7 +158,27 @@ def create_target(df, thresh=0.15):
         df['target'] = (df['pct_chg'] >= thresh).astype(int)
     else:
         raise ValueError('数据中缺少收盘价字段')
+    
+    # 基础权重
     df['sample_weight'] = 1.0
+    
+    # 1. 跌幅>7%高权重
+    df.loc[df['pct_chg'] <= -0.07, 'sample_weight'] = neg_weight
+    
+    # 2. 冲高回落高权重（如盘中回落超10%）
+    # 由于竞价数据没有high字段，这里简化处理
+    # 可以基于竞价涨幅和收盘涨幅的差异来判断
+    if '竞价涨幅' in df.columns:
+        chonggao_mask = (df['竞价涨幅'] - df['pct_chg'] >= 0.10)
+        df.loc[chonggao_mask, 'sample_weight'] = chonggao_weight
+    
+    # 3. 涨停高权重
+    if '收盘价' in df.columns and 'prev_close' in df.columns:
+        # 计算涨停价格
+        df['zt_price'] = df['prev_close'] * 1.2  # 20%涨停
+        is_zt = (df['收盘价'] >= df['zt_price'] * 0.997)  # 允许0.3%容差
+        df.loc[is_zt, 'sample_weight'] = zhangting_weight
+    
     return df
 
 # 补充：通达信日线收盘价补全逻辑
@@ -327,6 +348,7 @@ def main():
     # 1.1 通达信补全收盘价
     out_dir = os.path.dirname(os.path.abspath(__file__))
     stock_data = add_close_from_tdx(stock_data, code_col='股票代码', date_col='date')
+    stock_data = stock_data.sort_values('date')
     stock_data.to_csv(os.path.join(out_dir, 'jingjia_with_close.csv'), index=False, encoding='utf-8-sig')
     # 2. 特征工程与标签创建
     features, stock_data = feature_selection_jingjia(stock_data)
