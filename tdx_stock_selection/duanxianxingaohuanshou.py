@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger('StockSelector')
 
 class StockSelector:
-    def __init__(self, tdx_path='/mnt/c/new_tdx'):
+    def __init__(self, tdx_path='E:/new_tdx'):
         """
         初始化选股器
         :param tdx_path: 通达信数据目录路径
@@ -329,7 +329,7 @@ class StockSelector:
             return pd.DataFrame()
 
 if __name__ == "__main__":
-    selector = StockSelector(tdx_path="/mnt/c/new_tdx")  # 修改为您的通达信数据目录
+    selector = StockSelector(tdx_path="E:/new_tdx")  # 修改为您的通达信数据目录
     # 可指定target_date，如 '2023-01-01'，否则为最近一天
     result = selector.select_stocks(target_date='2025-07-14')
     # result = selector.select_stocks()
