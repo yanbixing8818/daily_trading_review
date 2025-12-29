@@ -1,4 +1,5 @@
 from mootdx.reader import Reader
+from mootdx.quotes import Quotes
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -9,14 +10,15 @@ import glob
 plt.rcParams['font.sans-serif'] = ['SimHei']
 plt.rcParams['axes.unicode_minus'] = False
 
-def get_local_stock_data(stock_code, tdx_data_path, start_date=None, end_date=None):
+def get_local_stock_data(stock_code, tdx_data_path, start_date=None, end_date=None, silent=False):
     """
     从mootdx读取本地通达信数据
     :param stock_code: 股票代码（如"600036"或"600519"）
     :param tdx_data_path: 通达信本地数据目录（如 "E:/new_tdx"）
     :param start_date: 开始日期（格式"YYYY-MM-DD"）
     :param end_date: 结束日期（格式"YYYY-MM-DD"）
-    :return: 包含OHLC的DataFrame
+    :param silent: 是否静默模式（批量计算时减少输出）
+    :return: 包含OHLC的DataFrame，如果数据过旧或不足则返回None
     """
     try:
         # 创建mootdx Reader
@@ -59,19 +61,43 @@ def get_local_stock_data(stock_code, tdx_data_path, start_date=None, end_date=No
             if col not in df.columns:
                 raise ValueError(f"缺少必要列：{col}，现有列：{list(df.columns)}")
         
-        # 排序并过滤空值
+        # 排序并过滤空值（按日期升序：最早的在前）
         df = df.sort_values('date').dropna(subset=['date'])
         
         # 只保留最近252天的数据（一年交易日，足够计算所有指标）
+        # 确保取的是最新的252天：先按日期降序排序，取前252条，再按升序排序
         required_days = 252
         if len(df) > required_days:
-            df = df.tail(required_days).reset_index(drop=True)
+            # 按日期降序排序（最新的在前），取前252条，再按升序排序（便于后续处理）
+            df = df.sort_values('date', ascending=False).head(required_days).sort_values('date').reset_index(drop=True)
         
-        print(f"读取到的数据：{len(df)}条，日期范围：{df['date'].min()} 至 {df['date'].max()}")
+        if len(df) > 0:
+            latest_date = df['date'].max()
+            oldest_date = df['date'].min()
+            
+            # 检查是否是最新数据
+            from datetime import datetime
+            today = datetime.now()
+            latest_date_dt = pd.to_datetime(latest_date)
+            days_diff = (today - latest_date_dt).days
+            
+            # 如果数据不是最新的（超过30天），舍弃不计算
+            if days_diff > 30:
+                if not silent:
+                    print(f"跳过 {stock_code}：最新数据日期是{latest_date}，距离今天{days_diff}天，数据过旧，舍弃不计算")
+                return None
+            
+            if not silent:
+                print(f"读取到的数据：{len(df)}条，日期范围：{oldest_date} 至 {latest_date}")
+        else:
+            if not silent:
+                print(f"读取到的数据：{len(df)}条")
         
-        # 如果数据量不足，给出警告
+        # 如果数据量不足，给出警告并返回None
         if len(df) < 90:
-            print(f"警告：数据量只有{len(df)}天，可能不足以准确计算所有指标")
+            if not silent:
+                print(f"跳过 {stock_code}：数据量只有{len(df)}天，不足以准确计算所有指标")
+            return None
         
         # 将日期转为字符串格式（YYYY-MM-DD）
         df['date'] = df['date'].dt.strftime('%Y-%m-%d')
@@ -240,6 +266,116 @@ def get_all_stock_codes(tdx_data_path):
                     code_set.add(code)
     return sorted(code_set)
 
+def get_stock_name(stock_code, tdx_data_path):
+    """
+    获取股票名称
+    :param stock_code: 股票代码（如"600519"）
+    :param tdx_data_path: 通达信数据目录
+    :return: 股票名称，如果获取失败返回股票代码
+    """
+    try:
+        # 补全市场前缀
+        if stock_code.startswith(('60', '68', '90')):
+            full_code = f'sh{stock_code}'
+        elif stock_code.startswith(('00', '30', '38')):
+            full_code = f'sz{stock_code}'
+        else:
+            full_code = stock_code
+        
+        quotes = Quotes.factory(market='std', tdxdir=tdx_data_path)
+        stock_info = quotes.instrument(symbol=full_code)
+        
+        if stock_info is not None and not stock_info.empty:
+            # 尝试获取名称字段（不同版本可能字段名不同）
+            for name_col in ['name', '名称', '股票名称', 'instrument_name']:
+                if name_col in stock_info.columns:
+                    name = stock_info[name_col].iloc[0]
+                    if pd.notna(name) and name:
+                        return str(name)
+            # 如果没有找到名称字段，尝试从索引获取
+            if hasattr(stock_info, 'index') and len(stock_info) > 0:
+                return str(stock_info.index[0])
+        
+        return stock_code  # 如果获取失败，返回股票代码
+    except Exception as e:
+        return stock_code  # 如果获取失败，返回股票代码
+
+def get_stock_name_map(stock_codes, tdx_data_path):
+    """
+    批量获取股票名称映射
+    :param stock_codes: 股票代码列表
+    :param tdx_data_path: 通达信数据目录（未使用，保留参数兼容性）
+    :return: {股票代码: 股票名称} 字典
+    """
+    name_map = {}
+    
+    print("正在批量获取股票名称...")
+    try:
+        # 使用 akshare 获取所有A股代码和名称
+        import akshare as ak
+        print("正在从 akshare 获取股票名称...")
+        stock_df = ak.stock_info_a_code_name()
+        
+        # 创建代码到名称的映射
+        akshare_name_map = dict(zip(stock_df['code'], stock_df['name']))
+        
+        # 为所有股票代码填充名称
+        for stock_code in stock_codes:
+            name = akshare_name_map.get(stock_code, stock_code)
+            name_map[stock_code] = name
+        
+        print(f"股票名称获取完成，共{len(name_map)}只")
+        return name_map
+        
+    except Exception as e:
+        print(f"使用 akshare 获取股票名称失败：{e}")
+        print("尝试使用 mootdx 获取股票名称...")
+        
+        # 如果 akshare 失败，回退到 mootdx
+        quotes = Quotes.factory(market='std', tdxdir=tdx_data_path)
+        
+        for idx, stock_code in enumerate(stock_codes, 1):
+            try:
+                if stock_code.startswith(('60', '68', '90')):
+                    full_code = f'sh{stock_code}'
+                elif stock_code.startswith(('00', '30', '38')):
+                    full_code = f'sz{stock_code}'
+                else:
+                    full_code = stock_code
+                
+                stock_info = quotes.instrument(symbol=full_code)
+                if stock_info is not None and not stock_info.empty:
+                    # 尝试多种可能的字段名
+                    name_found = False
+                    for name_col in ['name', '名称', '股票名称', 'instrument_name', 'code', 'symbol']:
+                        if name_col in stock_info.columns:
+                            name = stock_info[name_col].iloc[0]
+                            if pd.notna(name) and name and str(name) != stock_code:
+                                name_map[stock_code] = str(name)
+                                name_found = True
+                                break
+                    
+                    # 如果还是没找到，尝试查看整个DataFrame的结构
+                    if not name_found:
+                        # 打印前几个股票的信息用于调试
+                        if idx <= 3:
+                            print(f"调试：{stock_code} 的 stock_info 结构：")
+                            print(f"  列名：{stock_info.columns.tolist()}")
+                            print(f"  数据：{stock_info.iloc[0] if len(stock_info) > 0 else 'Empty'}")
+                        name_map[stock_code] = stock_code
+                else:
+                    name_map[stock_code] = stock_code
+            except Exception as ex:
+                name_map[stock_code] = stock_code
+                if idx <= 3:
+                    print(f"获取 {stock_code} 名称时出错：{ex}")
+            
+            if idx % 500 == 0:
+                print(f"已获取{idx}/{len(stock_codes)}只股票名称")
+        
+        print(f"股票名称获取完成，共{len(name_map)}只")
+        return name_map
+
 def calculate_all_stocks_main_accumulation(tdx_data_path, target_date=None, max_stocks=None):
     """
     批量计算所有股票的主力吸货值
@@ -256,13 +392,17 @@ def calculate_all_stocks_main_accumulation(tdx_data_path, target_date=None, max_
         stock_codes = stock_codes[:max_stocks]
         print(f"限制计算数量为{max_stocks}只股票（用于测试）")
     
+    # 批量获取股票名称
+    stock_name_map = get_stock_name_map(stock_codes, tdx_data_path)
+    
     results = []
     success_count = 0
     error_count = 0
     
     for idx, stock_code in enumerate(stock_codes, 1):
         try:
-            stock_df = get_local_stock_data(stock_code, tdx_data_path)
+            # 显示数据获取日志
+            stock_df = get_local_stock_data(stock_code, tdx_data_path, silent=False)
             if stock_df is None or stock_df.empty or len(stock_df) < 90:
                 error_count += 1
                 continue
@@ -270,20 +410,53 @@ def calculate_all_stocks_main_accumulation(tdx_data_path, target_date=None, max_
             indicator_df = calculate_stock_indicator(stock_df)
             if indicator_df is None or indicator_df.empty:
                 error_count += 1
+                if error_count <= 5:
+                    print(f"跳过 {stock_code}：指标计算失败或结果为空")
                 continue
             
             if target_date:
                 target_data = indicator_df[indicator_df['date'] == target_date]
+                if target_data.empty:
+                    # 检查目标日期是否在数据范围内
+                    latest_date = indicator_df['date'].max()
+                    oldest_date = indicator_df['date'].min()
+                    
+                    # 如果目标日期是未来日期或不在范围内，使用最新日期
+                    from datetime import datetime
+                    target_date_dt = pd.to_datetime(target_date)
+                    latest_date_dt = pd.to_datetime(latest_date)
+                    
+                    if target_date_dt > latest_date_dt:
+                        # 目标日期是未来日期，使用最新日期
+                        if error_count <= 5:
+                            print(f"提示 {stock_code}：目标日期 {target_date} 是未来日期，使用最新日期 {latest_date}")
+                        target_data = indicator_df.tail(1)
+                    elif target_date_dt < pd.to_datetime(oldest_date):
+                        # 目标日期太早，使用最新日期
+                        if error_count <= 5:
+                            print(f"提示 {stock_code}：目标日期 {target_date} 早于数据范围，使用最新日期 {latest_date}")
+                        target_data = indicator_df.tail(1)
+                    else:
+                        # 目标日期在范围内但不存在（可能是非交易日），使用最新日期
+                        if error_count <= 5:
+                            print(f"提示 {stock_code}：目标日期 {target_date} 不在数据中（可能是非交易日），使用最新日期 {latest_date}")
+                        target_data = indicator_df.tail(1)
             else:
                 target_data = indicator_df.tail(1)
             
             if target_data.empty:
                 error_count += 1
+                if error_count <= 5:
+                    print(f"跳过 {stock_code}：无法获取目标数据")
                 continue
             
             row = target_data.iloc[0]
+            # 从映射表中获取股票名称
+            stock_name = stock_name_map.get(stock_code, stock_code)
+            
             results.append({
                 '股票代码': stock_code,
+                '股票名称': stock_name,
                 '日期': row['date'],
                 '收盘价': round(row['close'], 2),
                 '主力吸货': round(row['主力吸货'], 2),
@@ -322,7 +495,7 @@ if __name__ == "__main__":
         # 单只股票模式
         stock_code = "600519"
         start_date = "2025-11-01"
-        end_date = "2025-12-28"
+        end_date = "2025-12-29"
         
         try:
             stock_df = get_local_stock_data(stock_code, tdx_data_path, start_date, end_date)
@@ -347,7 +520,7 @@ if __name__ == "__main__":
     
     elif mode == "batch":
         # 批量计算模式
-        target_date = "2025-12-26"  # 目标日期，None表示使用最新日期
+        target_date = "2025-12-29"  # 目标日期，None表示使用最新日期
         max_stocks = None  # 限制计算数量（用于测试），None表示计算全部
         
         try:
