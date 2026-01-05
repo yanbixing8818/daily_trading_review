@@ -395,6 +395,23 @@ def calculate_all_stocks_main_accumulation(tdx_data_path, target_date=None, max_
     # 批量获取股票名称
     stock_name_map = get_stock_name_map(stock_codes, tdx_data_path)
     
+    # 过滤掉ST和*ST股票
+    filtered_stock_codes = []
+    st_count = 0
+    for stock_code in stock_codes:
+        stock_name = stock_name_map.get(stock_code, stock_code)
+        # 检查股票名称是否包含ST或*ST
+        if 'ST' in stock_name or '*ST' in stock_name or 'st' in stock_name or '*st' in stock_name:
+            st_count += 1
+            continue
+        filtered_stock_codes.append(stock_code)
+    
+    if st_count > 0:
+        print(f"已过滤掉{st_count}只ST/*ST股票")
+    
+    stock_codes = filtered_stock_codes
+    print(f"剩余{len(stock_codes)}只股票待计算")
+    
     results = []
     success_count = 0
     error_count = 0
@@ -520,7 +537,7 @@ if __name__ == "__main__":
     
     elif mode == "batch":
         # 批量计算模式
-        target_date = "2025-12-29"  # 目标日期，None表示使用最新日期
+        target_date = "2026-01-05"  # 目标日期，None表示使用最新日期
         max_stocks = None  # 限制计算数量（用于测试），None表示计算全部
         
         try:
